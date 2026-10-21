@@ -63,3 +63,24 @@ export function rotateY([x, y, z]: Vec3, angle: number): Vec3 {
   const s = Math.sin(angle);
   return [x * c + z * s, y, -x * s + z * c];
 }
+
+/**
+ * Point reached by travelling `angle` radians of arc from (lat, lon) along
+ * `track` (radians clockwise from north), at `radius`. The movers shader
+ * does the same; keep them in step.
+ */
+export function moveAlong(lat: number, lon: number, track: number, angle: number, radius = 1): Vec3 {
+  const cl = Math.cos(lat);
+  const sl = Math.sin(lat);
+  const co = Math.cos(lon);
+  const so = Math.sin(lon);
+  const p0: Vec3 = [cl * co, sl, -cl * so];
+  const east: Vec3 = [-so, 0, -co];
+  const north: Vec3 = [-sl * co, cl, sl * so];
+  const ct = Math.cos(track);
+  const st = Math.sin(track);
+  const dir: Vec3 = [north[0] * ct + east[0] * st, north[1] * ct + east[1] * st, north[2] * ct + east[2] * st];
+  const ca = Math.cos(angle);
+  const sa = Math.sin(angle);
+  return [(p0[0] * ca + dir[0] * sa) * radius, (p0[1] * ca + dir[1] * sa) * radius, (p0[2] * ca + dir[2] * sa) * radius];
+}

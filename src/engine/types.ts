@@ -1,13 +1,15 @@
 import type { Quake } from "@/lib/feeds/quakes";
 import type { SatGroup } from "@/lib/feeds/satellites";
 
-export type LayerKey = "satellites" | "quakes" | "fires" | "clouds" | "lights" | "borders";
+export type LayerKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "clouds" | "lights" | "borders";
 
-export type FeedKey = "satellites" | "quakes" | "fires" | "clouds";
+export type FeedKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "clouds";
 export type FeedState = { status: "idle" | "loading" | "ready" | "error"; count: number; updated: number | null };
 
 export type Selection =
   | { kind: "satellite"; index: number; norad: number; name: string; group: SatGroup; inclination: number; periodMin: number }
+  | { kind: "plane"; id: string }
+  | { kind: "ship"; id: number }
   | { kind: "quake"; quake: Quake }
   | { kind: "fire"; index: number; lat: number; lon: number; frp: number; time: number };
 

@@ -97,7 +97,9 @@ export const cloudsFragment = /* glsl */ `
     vec3 v = normalize(cameraPosition - vPosW);
     float ndl = dot(n, uSun);
     float mask = texture2D(uClouds, vUv).r;
-    float density = pow(smoothstep(0.1, 1.0, mask), 1.25) * 0.92;
+    float density = pow(smoothstep(0.06, 1.0, mask), 1.4) * 0.88;
+    // Thin the deck as the camera descends so traffic and coastlines stay readable.
+    density *= mix(0.45, 1.0, smoothstep(1.35, 3.2, length(cameraPosition)));
     float twilight = smoothstep(-0.22, 0.0, ndl) * (1.0 - smoothstep(0.0, 0.3, ndl));
     vec3 color = vec3(1.0) * (max(ndl, 0.0) * 1.15 + 0.035);
     color += vec3(1.0, 0.45, 0.2) * twilight * 0.35;
@@ -323,6 +325,99 @@ export const reticleFragment = /* glsl */ `
     float a = max(ring * 0.9, ticks);
     if (a <= 0.01) discard;
     gl_FragColor = vec4(uColor, a);
+    #include <colorspace_fragment>
+  }
+`;
+
+/** Aircraft and ships: instanced icons moving along great circles (see lib/geo.ts#moveAlong). */
+export const moversVertex = (kinds: number) => /* glsl */ `
+  attribute vec2 iLatLon;
+  attribute float iT0;
+  attribute vec2 iMotion;
+  attribute float iAlt;
+  attribute float iKind;
+  attribute vec3 iFrom;
+  uniform float uNow;
+  uniform float uSwitch;
+  uniform float uBlend;
+  uniform float uMaxDt;
+  uniform float uSize;
+  uniform float uSelected;
+  uniform float uMinAlt;
+  uniform float uAltColor;
+  uniform vec3 uColors[${kinds}];
+  uniform float uKindOn[${kinds}];
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vSelected;
+
+  void main() {
+    vUv = uv;
+    int kind = int(iKind + 0.5);
+    float lat = iLatLon.x;
+    float lon = iLatLon.y;
+    vec3 p0 = vec3(cos(lat) * cos(lon), sin(lat), -cos(lat) * sin(lon));
+    vec3 east = vec3(-sin(lon), 0.0, -cos(lon));
+    vec3 north = vec3(-sin(lat) * cos(lon), cos(lat), sin(lat) * sin(lon));
+    vec3 dir = north * cos(iMotion.y) + east * sin(iMotion.y);
+    float a = iMotion.x * clamp(uNow - iT0, 0.0, uMaxDt);
+    vec3 pos = (p0 * cos(a) + dir * sin(a)) * (1.0 + iAlt);
+    vec3 fwd = normalize(-p0 * sin(a) + dir * cos(a));
+    float blend = clamp((uNow - uSwitch) / uBlend, 0.0, 1.0);
+    blend = blend * blend * (3.0 - 2.0 * blend);
+    if (dot(iFrom, iFrom) > 0.5) pos = mix(iFrom, pos, blend);
+
+    bool selected = abs(float(gl_InstanceID) - uSelected) < 0.5;
+    bool hidden = uKindOn[kind] < 0.5 || iAlt < uMinAlt;
+    vSelected = selected ? 1.0 : 0.0;
+    vec3 color = uColors[kind];
+    // Aircraft: warm white at cruise, amber close to the ground.
+    if (uAltColor > 0.5 && kind == 0) color = mix(vec3(1.0, 0.72, 0.36), color, smoothstep(0.0008, 0.006, iAlt));
+    vColor = selected ? vec3(1.0, 0.82, 0.42) : color;
+
+    vec3 n = normalize(pos);
+    vec3 side = normalize(cross(fwd, n));
+    float size = uSize * length(cameraPosition - pos) * (selected ? 1.7 : 1.0);
+    vec3 world = pos + (side * position.x + fwd * position.y) * size;
+    gl_Position = hidden && !selected ? vec4(2.0, 2.0, 2.0, 1.0) : projectionMatrix * viewMatrix * vec4(world, 1.0);
+  }
+`;
+
+export const moversFragment = (icon: "plane" | "ship") => /* glsl */ `
+  uniform float uOpacity;
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vSelected;
+
+  float box(vec2 p, vec2 b) {
+    vec2 d = abs(p) - b;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+  }
+
+  void main() {
+    vec2 p = vUv - 0.5;
+    float d;
+    ${
+      icon === "plane"
+        ? `
+    // Fuselage, swept wings, tailplane.
+    float fuselage = box(p - vec2(0.0, 0.0), vec2(0.045, 0.42)) - 0.02;
+    vec2 w = vec2(abs(p.x), p.y + abs(p.x) * 0.55 - 0.06);
+    float wings = box(w - vec2(0.2, 0.0), vec2(0.26, 0.045));
+    vec2 tl = vec2(abs(p.x), p.y + abs(p.x) * 0.45 + 0.34);
+    float tail = box(tl - vec2(0.08, 0.0), vec2(0.11, 0.03));
+    d = min(fuselage, min(wings, tail));`
+        : `
+    // Pointed hull.
+    float halfWidth = 0.17 * (1.0 - smoothstep(0.05, 0.46, p.y));
+    d = max(abs(p.x) - halfWidth, abs(p.y - 0.02) - 0.42);`
+    }
+    float edge = 0.035;
+    float shape = 1.0 - smoothstep(-edge, edge, d);
+    float halo = vSelected * (1.0 - smoothstep(0.0, 0.5, length(p))) * 0.35;
+    float a = max(shape, halo);
+    if (a < 0.02) discard;
+    gl_FragColor = vec4(vColor, a * uOpacity);
     #include <colorspace_fragment>
   }
 `;

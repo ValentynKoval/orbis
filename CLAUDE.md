@@ -11,13 +11,27 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
 - **Non-commercial.** No ads, no paid features, no tracking; several sources (OpenSky, airplanes.live) allow non-commercial use only.
   Keep the `/[locale]/sources` attribution page complete when adding a source.
 - **Visitors never call upstream APIs.** Feeds go through our own routes (`src/app/api/*`) with CDN cache headers
-  (`lib/http.ts`), or through the relay (stage 2). CelesTrak is read only by the GitHub Action mirror
+  (`lib/http.ts`); live traffic comes from the relay through `/api/live/*`. CelesTrak is read only by the GitHub Action mirror
   (`.github/workflows/mirror-celestrak.yml` → orphan branch `data`).
 - **No `Co-Authored-By` trailers or any AI attribution** in commits, PRs, README or UI (Valentyn's rule).
 - **Repository is public.** No secrets in code or history; keys go to env vars and `.env.example` lists them.
   The Gemini key lives in Valentyn's `D:\Dev\olx-monitor\.env`; copy it to Vercel env, never into the repo.
 - `pages.dev` / `workers.dev` are blocked by the Ukrainian ISP Vega: anything visitors load must be served from Vercel
   (rewrite/proxy if the backend is elsewhere).
+
+## Relay (`relay/`, Cloudflare Worker + one Durable Object)
+
+- Account: Valentyn's Cloudflare (`valentyn.golf@gmail.com`), URL `https://orbis-relay.valentyngolf.workers.dev`.
+  The global wrangler login on this PC belongs to Maxim, so **every wrangler command for Orbis runs with
+  `XDG_CONFIG_HOME='C:\Users\Valentyn\.orbis-wrangler'`** (Valentyn's login lives there). Never run `wrangler login` globally.
+- The `Hub` object holds the aisstream.io WebSocket (global, compressed), polls adsb.lol every 90 s and Digitraffic,
+  keeps ship and plane tracks in memory, and serves JSON snapshots. One always-on object uses ~10,800 of the
+  13,000 free GB-s per day: do not add a second always-on object.
+- Only requests with `x-orbis-key: RELAY_TOKEN` are served; Vercel holds the token (`RELAY_URL`, `RELAY_TOKEN` env).
+  Secrets on the worker: `RELAY_TOKEN`, `AISSTREAM_API_KEY` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
+- OpenSky is not used: it does not answer requests from Cloudflare or Vercel (AWS) networks. Aircraft come from
+  adsb.lol (ODbL), which must stay credited on the Sources page.
+- Deploy: `cd relay && XDG_CONFIG_HOME=... npx wrangler deploy`. A deploy restarts the object; ships repopulate in minutes.
 
 ## Languages
 

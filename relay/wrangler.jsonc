@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "orbis-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["web_socket_compression"],
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "Hub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "observability": { "enabled": true }
+  // Secrets (wrangler secret put): RELAY_TOKEN, AISSTREAM_API_KEY
+}

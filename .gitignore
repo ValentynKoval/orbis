@@ -43,3 +43,8 @@ next-env.d.ts
 
 # source imagery downloaded by scripts/build-assets.mjs
 /.cache/
+
+# relay
+/relay/node_modules/
+/relay/.wrangler/
+/relay/.dev.vars

@@ -7,11 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "next typegen && tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit && tsc --noEmit -p relay",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "assets": "node scripts/build-assets.mjs"
+    "assets": "node scripts/build-assets.mjs",
+    "relay:deploy": "npm --prefix relay run deploy"
   },
   "dependencies": {
     "clsx": "^2.1.1",

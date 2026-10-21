@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { gmst, julianDate, normalizeLon, sunPosition } from "./astro";
-import { advanceOrbit, haversineKm, latLonToVec, vecToLatLon, type Vec3 } from "./geo";
+import { advanceOrbit, haversineKm, latLonToVec, moveAlong, vecToLatLon, type Vec3 } from "./geo";
 import { parseUsgs } from "./feeds/quakes";
 import { parseFirmsCsv } from "./feeds/fires";
 import { classify, parseTle, SatGroup } from "./feeds/satellites";
@@ -115,5 +115,18 @@ describe("feeds", () => {
     const recs = parseTle(tle);
     expect(recs.map((r) => r.norad)).toEqual([25544, 44713, 26824]);
     expect(recs.map(classify)).toEqual([SatGroup.Station, SatGroup.Starlink, SatGroup.Geostationary]);
+  });
+});
+
+describe("great-circle motion", () => {
+  it("moves north from the equator to the pole after a quarter turn", () => {
+    const [x, y] = moveAlong(0, 0, 0, Math.PI / 2);
+    expect(x).toBeCloseTo(0, 9);
+    expect(y).toBeCloseTo(1, 9);
+  });
+
+  it("moves east along the equator", () => {
+    const p = moveAlong(0, 0, Math.PI / 2, Math.PI / 2, 2);
+    expect(p[2]).toBeCloseTo(-2, 9);
   });
 });

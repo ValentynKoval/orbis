@@ -4,6 +4,7 @@
  * busiest fire region, the most populated part of the night side.
  */
 import type { FireGrid } from "./feeds/fires";
+import type { PlaneSnapshot } from "./feeds/live";
 import type { Quake } from "./feeds/quakes";
 import { latLonToVec } from "./geo";
 
@@ -21,12 +22,12 @@ export function strongestQuake(quakes: Quake[], now: number, windowMs = 86_400_0
   return best;
 }
 
-/** Centre of the 10°×10° box with the most fire cells. */
-export function busiestFireRegion(grid: Pick<FireGrid, "lat" | "lon">): Spot | null {
+/** Centre of the 10°×10° box holding the most points. Coordinates are degrees × `scale`. */
+export function busiestRegion(grid: Pick<FireGrid, "lat" | "lon">, scale = 100): Spot | null {
   const counts = new Map<number, { n: number; lat: number; lon: number }>();
   for (let i = 0; i < grid.lat.length; i++) {
-    const lat = grid.lat[i] / 100;
-    const lon = grid.lon[i] / 100;
+    const lat = grid.lat[i] / scale;
+    const lon = grid.lon[i] / scale;
     const key = Math.floor((lat + 90) / 10) * 100 + Math.floor((lon + 180) / 10);
     const c = counts.get(key);
     if (c) {
@@ -38,6 +39,15 @@ export function busiestFireRegion(grid: Pick<FireGrid, "lat" | "lon">): Spot | n
   let best: { n: number; lat: number; lon: number } | null = null;
   for (const c of counts.values()) if (!best || c.n > best.n) best = c;
   return best ? { lat: best.lat / best.n, lon: best.lon / best.n } : null;
+}
+
+/** The airborne aircraft with the highest ground speed. */
+export function fastestPlane(snap: Pick<PlaneSnapshot, "spd" | "gnd">): number {
+  let best = -1;
+  for (let i = 0; i < snap.spd.length; i++) {
+    if (!snap.gnd[i] && (best < 0 || snap.spd[i] > snap.spd[best])) best = i;
+  }
+  return best;
 }
 
 /** Densely lit regions, roughly by population. */

@@ -3,20 +3,24 @@ import { gmst, sunPosition } from "@/lib/astro";
 import { latLonToVec, rotateY, type Vec3 } from "@/lib/geo";
 import type { FireGrid } from "@/lib/feeds/fires";
 import type { Quake } from "@/lib/feeds/quakes";
-import { busiestFireRegion } from "@/lib/tour";
+import { busiestRegion } from "@/lib/tour";
+import type { SearchCandidate } from "@/lib/search";
 import { SatGroup } from "@/lib/feeds/satellites";
-import { setFeed, useOrbis } from "@/store/orbis";
+import { setFeed, useOrbis, type PlaneFilter } from "@/store/orbis";
 import { CameraRig } from "./CameraRig";
 import { SimClock } from "./SimClock";
 import { Fires } from "./layers/Fires";
 import { Planet } from "./layers/Planet";
 import { Quakes } from "./layers/Quakes";
 import { Satellites } from "./layers/Satellites";
+import { planeAltitude, Traffic } from "./layers/Traffic";
 import { reticleFragment, reticleVertex } from "./shaders";
 import type { FeedKey, LayerKey, Selection } from "./types";
 
 const REFRESH_MS: Record<FeedKey, number> = {
   satellites: 2 * 3600_000,
+  planes: 30_000,
+  ships: 45_000,
   quakes: 60_000,
   fires: 30 * 60_000,
   clouds: 6 * 3600_000,
@@ -39,6 +43,7 @@ export class Engine {
   private satellites: Satellites;
   private quakes = new Quakes();
   private fires: Fires;
+  readonly traffic = new Traffic();
   private reticle: THREE.Points;
   private reticleMaterial: THREE.ShaderMaterial;
   private observer: ResizeObserver;
@@ -102,6 +107,9 @@ export class Engine {
       this.fires.points,
       this.quakes.mesh,
       this.planet.clouds,
+      this.traffic.ships.mesh,
+      this.traffic.planes.mesh,
+      this.traffic.track,
       this.planet.atmosphere,
       this.reticle,
     );
@@ -158,6 +166,8 @@ export class Engine {
     useOrbis.setState({ ready: true });
 
     this.schedule("satellites", () => this.loadSatellites());
+    this.schedule("planes", () => this.loadPlanes());
+    this.schedule("ships", () => this.loadShips());
     this.schedule("quakes", () => this.loadQuakes());
     this.schedule("fires", () => this.loadFires());
     this.schedule("clouds", () => this.loadClouds());
@@ -174,6 +184,7 @@ export class Engine {
     this.satellites.dispose();
     this.quakes.dispose();
     this.fires.dispose();
+    this.traffic.dispose();
     this.reticleMaterial.dispose();
     this.reticle.geometry.dispose();
     this.renderer.dispose();
@@ -195,14 +206,91 @@ export class Engine {
   }
 
   select(selection: Selection | null) {
-    this.satellites.select(selection?.kind === "satellite" ? selection.index : -1, this.clock.now());
+    const now = this.clock.now();
+    this.satellites.select(selection?.kind === "satellite" ? selection.index : -1, now);
+    this.traffic.planes.select(selection?.kind === "plane" ? this.traffic.planes.indexOf(selection.id) : -1);
+    this.traffic.ships.select(selection?.kind === "ship" ? this.traffic.ships.indexOf(selection.id) : -1);
+    this.traffic.clearTrack();
+    if (selection?.kind === "plane" || selection?.kind === "ship") this.loadTrack(selection);
     this.reticle.visible = !!selection;
     this.lastDetail = 0;
+  }
+
+  private loadTrack(selection: Extract<Selection, { kind: "plane" | "ship" }>) {
+    this.traffic
+      .showTrack(selection.kind, selection.id, this.clock.now() / 1000)
+      .then((detail) => {
+        if (detail && useOrbis.getState().selection === selection) useOrbis.setState({ selectionDetail: detail });
+      })
+      .catch(() => undefined);
+  }
+
+  setPlaneFilter(filter: PlaneFilter) {
+    this.traffic.planes.setKindVisible(1, filter === "all");
+    this.traffic.planes.setMinAlt(filter === "high" ? planeAltitude(9000, false) : -1);
+  }
+
+  setShipKind(kind: number, on: boolean) {
+    this.traffic.ships.setKindVisible(kind, on);
   }
 
   /** Points the camera at a place, keeping the current altitude unless given. */
   flyTo(lat: number, lon: number, dist?: number) {
     this.rig.flyTo({ lat, lon, dist: dist ?? Math.min(this.rig.goal.dist, 3) }, 1.4);
+  }
+
+  /** Everything the search palette can find. Ship names are fetched on first use. */
+  async searchCandidates(): Promise<SearchCandidate[]> {
+    const out: SearchCandidate[] = [];
+    const cat = this.satellites.catalog;
+    if (cat) {
+      for (let i = 0; i < cat.names.length; i++) {
+        out.push({ kind: "satellite", key: i, label: cat.names[i], sub: String(cat.norad[i]), terms: [cat.names[i], String(cat.norad[i])] });
+      }
+    }
+    const p = this.traffic.planeSnap;
+    if (p) {
+      for (let i = 0; i < p.ids.length; i++) {
+        const label = p.callsign[i] || p.reg[i] || p.ids[i].toUpperCase();
+        out.push({ kind: "plane", key: p.ids[i], label, sub: [p.reg[i], p.type[i]].filter(Boolean).join(", "), terms: [p.callsign[i], p.reg[i], p.ids[i]] });
+      }
+    }
+    const names = await this.traffic.names();
+    for (const id of this.traffic.ships.ids as number[]) {
+      const name = names.get(id);
+      out.push({ kind: "ship", key: id, label: name || `MMSI ${id}`, sub: String(id), terms: [name ?? "", String(id)] });
+    }
+    for (const q of useOrbis.getState().quakes) {
+      out.push({ kind: "quake", key: q.id, label: q.place, sub: `M${q.mag.toFixed(1)}`, terms: [q.place] });
+    }
+    return out;
+  }
+
+  /** Turns a search hit into a selection, selects it and flies to it. */
+  async focusResult(kind: SearchCandidate["kind"], key: string | number) {
+    const store = useOrbis.getState();
+    const now = this.clock.now();
+    if (kind === "satellite") {
+      const cat = this.satellites.catalog;
+      const i = key as number;
+      if (!cat) return;
+      store.select({ kind: "satellite", index: i, norad: cat.norad[i], name: cat.names[i], group: cat.groups[i] as SatGroup, inclination: cat.inclination[i], periodMin: cat.periodMin[i] });
+      const live = await this.satellites.detail(i, now, "focus");
+      if (live) this.rig.flyTo({ lat: live.lat, lon: live.lon, dist: live.altKm > 15000 ? 14 : live.altKm > 3000 ? 7 : 2.8 }, 1.6);
+    } else if (kind === "plane") {
+      store.select({ kind, id: key as string });
+      const info = this.traffic.planeInfo(key as string, now / 1000);
+      if (info) this.rig.flyTo({ lat: info.lat, lon: info.lon, dist: 1.6 }, 1.6);
+    } else if (kind === "ship") {
+      store.select({ kind, id: key as number });
+      const info = this.traffic.shipInfo(key as number, now / 1000);
+      if (info) this.rig.flyTo({ lat: info.lat, lon: info.lon, dist: 1.5 }, 1.6);
+    } else {
+      const quake = store.quakes.find((q) => q.id === key);
+      if (!quake) return;
+      store.select({ kind: "quake", quake });
+      this.rig.flyTo({ lat: quake.lat, lon: quake.lon, dist: 2.2 }, 1.6);
+    }
   }
 
   get stats() {
@@ -226,6 +314,7 @@ export class Engine {
     this.animateOpacity(dt);
 
     this.satellites.update(sim);
+    this.traffic.update(sim / 1000);
     this.quakes.update(sim, this.clockSeconds, this.rig.pose.dist);
     this.fires.update(sim, this.clockSeconds);
     this.updateReticle(sim);
@@ -238,13 +327,16 @@ export class Engine {
     const k = 1 - Math.exp(-dt * 5);
     for (const key of Object.keys(this.opacity) as LayerKey[]) {
       const o = this.opacity[key];
-      const dataLayer = key === "satellites" || key === "quakes" || key === "fires";
+      const dataLayer = key === "satellites" || key === "planes" || key === "ships" || key === "quakes" || key === "fires";
       const focusScale = this.focus && dataLayer && this.focus !== key ? 0.18 : 1;
       o.value += (o.target * focusScale - o.value) * k;
     }
     this.satellites.setOpacity(this.opacity.satellites.value);
     this.quakes.setOpacity(this.opacity.quakes.value);
     this.fires.setOpacity(this.opacity.fires.value);
+    this.traffic.planes.setOpacity(this.opacity.planes.value);
+    this.traffic.ships.setOpacity(this.opacity.ships.value);
+    this.traffic.track.visible &&= this.opacity.planes.value + this.opacity.ships.value > 0.02;
     this.planet.setCloudsOpacity(this.opacity.clouds.value);
     this.planet.setLights(this.opacity.lights.value);
     this.planet.setBordersOpacity(this.opacity.borders.value);
@@ -256,6 +348,11 @@ export class Engine {
     if (sel.kind === "satellite") {
       const p = this.satellites.positionOf(sel.index, sim);
       return p ? rotateY(p, this.inertial.rotation.y) : null;
+    }
+    if (sel.kind === "plane" || sel.kind === "ship") {
+      const layer = sel.kind === "plane" ? this.traffic.planes : this.traffic.ships;
+      const i = layer.indexOf(sel.id);
+      return i >= 0 ? layer.displayed(i, sim / 1000) : null;
     }
     if (sel.kind === "quake") return latLonToVec(sel.quake.lat, sel.quake.lon, 1.003);
     return latLonToVec(sel.lat, sel.lon, 1.003);
@@ -357,6 +454,22 @@ export class Engine {
       }
     }
 
+    const nowS = this.clock.now() / 1000;
+    for (const kind of ["ship", "plane"] as const) {
+      const layer = kind === "plane" ? this.traffic.planes : this.traffic.ships;
+      if (this.opacity[kind === "plane" ? "planes" : "ships"].target <= 0) continue;
+      for (let i = 0; i < layer.count; i++) {
+        if (!layer.visible(i)) continue;
+        const [x, y, z] = layer.displayed(i, nowS);
+        if (!surfaceVisible(x, y, z) && occludedByEarth(cam, x, y, z)) continue;
+        const d = screen(x, y, z) - (kind === "plane" ? 2 : 0);
+        if (d < bestD) {
+          bestD = d;
+          best = kind === "plane" ? { kind, id: layer.ids[i] as string } : { kind, id: layer.ids[i] as number };
+        }
+      }
+    }
+
     const catalog = this.satellites.catalog;
     if (this.opacity.satellites.target > 0 && catalog) {
       const sim = this.clock.now();
@@ -411,6 +524,29 @@ export class Engine {
     // Status turns "ready" when the worker reports the parsed catalogue.
   }
 
+  private async loadPlanes() {
+    const n = await this.traffic.loadPlanes(this.clock.now() / 1000);
+    if (n === null) return;
+    setFeed("planes", { status: "ready", count: n, updated: Date.now() });
+    this.refreshSelection("plane");
+  }
+
+  private async loadShips() {
+    const n = await this.traffic.loadShips(this.clock.now() / 1000);
+    if (n === null) return;
+    setFeed("ships", { status: "ready", count: n, updated: Date.now() });
+    this.refreshSelection("ship");
+  }
+
+  /** Instance indices change with every snapshot: re-point the highlight and redraw the track. */
+  private refreshSelection(kind: "plane" | "ship") {
+    const sel = useOrbis.getState().selection;
+    if (sel?.kind !== kind) return;
+    const layer = kind === "plane" ? this.traffic.planes : this.traffic.ships;
+    layer.select(layer.indexOf(sel.id));
+    this.loadTrack(sel);
+  }
+
   private async loadQuakes() {
     const res = await fetch("/api/quakes");
     if (!res.ok) throw new Error(`quakes ${res.status}`);
@@ -426,7 +562,7 @@ export class Engine {
     if (!res.ok) throw new Error(`fires ${res.status}`);
     const data: FireGrid & { updated: number } = await res.json();
     this.fires.set(data);
-    useOrbis.setState({ fireSpot: busiestFireRegion(data) });
+    useOrbis.setState({ fireSpot: busiestRegion(data) });
     setFeed("fires", { status: "ready", count: data.lat.length, updated: data.updated });
   }
 

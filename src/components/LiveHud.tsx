@@ -8,10 +8,13 @@ import { useOrbis } from "@/store/orbis";
 import type { FeedKey, LayerKey, Selection } from "@/engine/types";
 import { ArrowUpRight, Close, Recenter, Stack, Target } from "./icons";
 import { useNow } from "./hooks";
+import { Search } from "./Search";
 import { TopBar } from "./TopBar";
 
 const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
   { key: "satellites", feed: "satellites", swatch: "bg-ion" },
+  { key: "planes", feed: "planes", swatch: "bg-contrail" },
+  { key: "ships", feed: "ships", swatch: "bg-aurora" },
   { key: "quakes", feed: "quakes", swatch: "bg-seismic" },
   { key: "fires", feed: "fires", swatch: "bg-ember" },
   { key: "clouds", feed: "clouds", swatch: "bg-cloud" },
@@ -47,6 +50,7 @@ export function LiveHud() {
   return (
     <div className="pointer-events-none fixed inset-0 z-10">
       <TopBar live />
+      <Search />
       <h1 className="sr-only">{t.nav.live}</h1>
 
       {/* Layers: a side panel on wide screens, a sheet behind a button on phones. */}
@@ -76,7 +80,45 @@ export function LiveHud() {
 }
 
 function cardKey(s: Selection) {
-  return s.kind === "quake" ? s.quake.id : `${s.kind}-${s.index}`;
+  if (s.kind === "quake") return s.quake.id;
+  if (s.kind === "plane" || s.kind === "ship") return `${s.kind}-${s.id}`;
+  return `${s.kind}-${s.index}`;
+}
+
+function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors duration-300 ease-[var(--ease-orbit)] ${on ? "border-foil/45 text-lunar" : "border-hairline text-dim hover:text-haze"}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Filters({ layer }: { layer: "planes" | "ships" }) {
+  const t = useDict();
+  const planeFilter = useOrbis((s) => s.planeFilter);
+  const setPlaneFilter = useOrbis((s) => s.setPlaneFilter);
+  const shipKinds = useOrbis((s) => s.shipKinds);
+  const toggleShipKind = useOrbis((s) => s.toggleShipKind);
+  return (
+    <div className="flex flex-wrap gap-1.5 px-3 pb-2.5 pl-8">
+      {layer === "planes"
+        ? (["all", "airborne", "high"] as const).map((f) => (
+            <Chip key={f} on={planeFilter === f} onClick={() => setPlaneFilter(f)}>
+              {t.filters[f]}
+            </Chip>
+          ))
+        : t.shipKinds.map((name, kind) => (
+            <Chip key={name} on={shipKinds[kind]} onClick={() => toggleShipKind(kind)}>
+              {name}
+            </Chip>
+          ))}
+    </div>
+  );
 }
 
 function LayerPanel() {
@@ -117,6 +159,7 @@ function LayerPanel() {
                   <span className={`flex-1 text-sm transition-colors duration-300 ${on ? "text-lunar" : "text-dim"}`}>{t.layers[key]}</span>
                   <span className={`readout text-xs whitespace-nowrap ${state?.status === "error" ? "text-seismic" : "text-dim"}`}>{status}</span>
                 </button>
+                {on && (key === "planes" || key === "ships") && <Filters layer={key} />}
               </li>
             );
           })}
@@ -149,9 +192,11 @@ function ObjectCard({ selection }: { selection: Selection }) {
   const t = useDict();
   const locale = useLocale();
   const live = useOrbis((s) => s.selectionLive);
+  const detail = useOrbis((s) => s.selectionDetail);
   const engine = useOrbis((s) => s.engine);
   const select = useOrbis((s) => s.select);
   const now = useNow(1000);
+  const simS = (engine?.clock.now() ?? now) / 1000;
 
   let kicker = "";
   let title = "";
@@ -175,6 +220,47 @@ function ObjectCard({ selection }: { selection: Selection }) {
     ];
     if (live) focus = { lat: live.lat, lon: live.lon, dist: live.altKm > 15000 ? 14 : live.altKm > 3000 ? 7 : 2.8 };
     link = { href: `https://www.n2yo.com/satellite/?s=${selection.norad}`, label: t.card.n2yo };
+  } else if (selection.kind === "plane") {
+    const p = engine?.traffic.planeInfo(selection.id, simS);
+    kicker = p?.type ? `${t.card.aircraft} ${p.type}` : t.card.aircraft;
+    title = p?.callsign || p?.reg || selection.id.toUpperCase();
+    accent = p?.emergency ? "text-seismic" : "text-contrail";
+    if (p) {
+      rows = [
+        [t.card.altitude, p.ground ? t.card.onGround : `${formatNumber(p.altM, locale)} ${t.units.m} (${formatNumber(p.altM / 0.3048, locale)} ${t.units.ft})`],
+        [t.card.groundSpeed, `${formatNumber(p.speedMs * 3.6, locale)} ${t.units.kmh}`],
+        [t.card.heading, `${formatNumber(p.track, locale)}°`],
+        [t.card.verticalRate, `${p.vrMs > 0 ? "+" : ""}${formatNumber(p.vrMs, locale, 1)} ${t.units.ms}`],
+        [t.card.position, formatLatLon(p.lat, p.lon)],
+        [t.card.registration, p.reg || "—"],
+        [t.card.squawk, p.squawk || "—"],
+      ];
+      if (p.emergency) note = t.card.emergency;
+      else note = t.card.trackNote;
+      focus = { lat: p.lat, lon: p.lon, dist: 1.6 };
+    }
+    link = { href: `https://adsb.lol/?icao=${selection.id}`, label: t.card.adsb };
+  } else if (selection.kind === "ship") {
+    const s = engine?.traffic.shipInfo(selection.id, simS);
+    const d = detail?.mmsi === selection.id ? detail : null;
+    kicker = s ? t.shipKinds[s.kind] : t.card.ship;
+    title = d?.name || `MMSI ${selection.id}`;
+    accent = "text-aurora";
+    if (s) {
+      rows = [
+        [t.card.speed, `${formatNumber(s.sogKn, locale, 1)} ${t.units.kn}`],
+        [t.card.course, `${formatNumber(s.cog, locale)}°`],
+        [t.card.destination, d?.destination || "—"],
+        [t.card.length, d?.lengthM ? `${formatNumber(d.lengthM, locale)} ${t.units.m}` : "—"],
+        [t.card.position, formatLatLon(s.lat, s.lon)],
+        [t.card.mmsi, String(selection.id)],
+        [t.card.lastReport, formatAgo(s.seen, now, locale)],
+      ];
+      if (d?.imo) rows.splice(5, 0, [t.card.imo, String(d.imo)]);
+      note = t.card.trackNote;
+      focus = { lat: s.lat, lon: s.lon, dist: 1.5 };
+    }
+    link = { href: `https://www.marinetraffic.com/en/ais/details/ships/mmsi:${selection.id}`, label: t.card.marineTraffic };
   } else if (selection.kind === "quake") {
     const q = selection.quake;
     kicker = t.card.quake;

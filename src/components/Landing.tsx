@@ -8,7 +8,8 @@ import { useDict, useLocale } from "@/i18n/client";
 import { fill } from "@/i18n/config";
 import { sunPosition } from "@/lib/astro";
 import { formatAgo, formatLatLon, formatNumber } from "@/lib/format";
-import { nightSpot, strongestQuake } from "@/lib/tour";
+import { busiestRegion, fastestPlane, nightSpot, strongestQuake } from "@/lib/tour";
+import { COORD_SCALE } from "@/lib/feeds/live";
 import { useOrbis } from "@/store/orbis";
 import type { CameraPose, LayerKey } from "@/engine/types";
 import { ArrowUpRight } from "./icons";
@@ -17,7 +18,7 @@ import { TopBar } from "./TopBar";
 
 gsap.registerPlugin(ScrollTrigger);
 
-type Chapter = "hero" | "orbit" | "ground" | "heat" | "night" | "final";
+type Chapter = "hero" | "orbit" | "sky" | "sea" | "ground" | "heat" | "night" | "final";
 
 interface Shot {
   pose: CameraPose;
@@ -43,6 +44,16 @@ function shotFor(chapter: Chapter, wide: boolean): Shot {
       };
     case "orbit":
       return { pose: { lat: 26, lon: sun.lon - 30, dist: wide ? 9.5 : 13 }, focus: "satellites", offset: side, rotate: 2.2 };
+    case "sky": {
+      const snap = s.engine?.traffic.planeSnap;
+      const spot = (snap && busiestRegion(snap, COORD_SCALE)) ?? { lat: 48, lon: 8 };
+      return { pose: { lat: spot.lat, lon: spot.lon, dist: wide ? 2.2 : 2.9 }, focus: "planes", offset: side, rotate: 0.4 };
+    }
+    case "sea": {
+      const snap = s.engine?.traffic.shipSnap;
+      const spot = (snap && busiestRegion(snap, COORD_SCALE)) ?? { lat: 52, lon: 4 };
+      return { pose: { lat: spot.lat, lon: spot.lon, dist: wide ? 1.9 : 2.5 }, focus: "ships", offset: side, rotate: 0 };
+    }
     case "ground": {
       const q = strongestQuake(s.quakes, now);
       return { pose: { lat: q?.lat ?? 12, lon: q?.lon ?? 150, dist: wide ? 2.8 : 3.6 }, focus: "quakes", offset: side, rotate: 0 };
@@ -146,6 +157,9 @@ export function Landing() {
 
   const count = (n: number, status: string) => (status === "ready" ? formatNumber(n, locale) : "…");
   const strongest = strongestQuake(quakes, now);
+  const planeSnap = feeds.planes.status === "ready" ? engine?.traffic.planeSnap : null;
+  const fastestIndex = planeSnap ? fastestPlane(planeSnap) : -1;
+  const fastest = planeSnap && fastestIndex >= 0 ? engine?.traffic.planeInfo(planeSnap.ids[fastestIndex], now / 1000) : null;
 
   return (
     <div ref={root} className="relative z-10">
@@ -182,15 +196,17 @@ export function Landing() {
               </span>
             </Link>
           </div>
-          <dl data-fade className="mt-12 grid max-w-[34rem] grid-cols-3 border-t border-hairline pt-5">
+          <dl data-fade className="mt-12 grid max-w-[38rem] grid-cols-3 gap-x-5 gap-y-5 border-t border-hairline pt-5 sm:grid-cols-5">
             {(
               [
                 ["satellites", "text-ion"],
+                ["planes", "text-contrail"],
+                ["ships", "text-aurora"],
                 ["quakes", "text-seismic"],
                 ["fires", "text-ember"],
               ] as const
-            ).map(([key, color], i) => (
-              <div key={key} className={i ? "border-l border-hairline pl-4" : "pr-4"}>
+            ).map(([key, color]) => (
+              <div key={key}>
                 <dt className="sr-only">{t.readout[key]}</dt>
                 <dd className={`readout font-display text-xl font-light tracking-tight md:text-3xl ${color}`}>
                   {count(feeds[key].count, feeds[key].status)}
@@ -218,6 +234,23 @@ export function Landing() {
             })}
           </p>
         )}
+      </Chapter>
+
+      <Chapter id="sky" legend={t.layers.planes} color="bg-contrail text-contrail" title={t.chapters.sky.title}>
+        <p>{fill(t.chapters.sky.body, { count: count(feeds.planes.count, feeds.planes.status) })}</p>
+        {fastest && (
+          <p className="readout text-sm text-lunar">
+            {fill(t.chapters.sky.fastest, {
+              callsign: fastest.callsign || fastest.reg || fastest.id.toUpperCase(),
+              speed: formatNumber(fastest.speedMs * 3.6, locale),
+              alt: formatNumber(fastest.altM, locale),
+            })}
+          </p>
+        )}
+      </Chapter>
+
+      <Chapter id="sea" legend={t.layers.ships} color="bg-aurora text-aurora" title={t.chapters.sea.title}>
+        <p>{fill(t.chapters.sea.body, { count: count(feeds.ships.count, feeds.ships.status) })}</p>
       </Chapter>
 
       <Chapter id="ground" legend={t.layers.quakes} color="bg-seismic text-seismic" title={t.chapters.ground.title}>

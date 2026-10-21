@@ -2,11 +2,13 @@
 
 import { create } from "zustand";
 import type { Quake } from "@/lib/feeds/quakes";
+import { SHIP_KINDS, type ShipDetail } from "@/lib/feeds/live";
 import type { Spot } from "@/lib/tour";
 import type { FeedKey, FeedState, LayerKey, SatLive, Selection } from "@/engine/types";
 import type { Engine } from "@/engine/Engine";
 
 export type Mode = "landing" | "live";
+export type PlaneFilter = "all" | "airborne" | "high";
 
 interface OrbisState {
   engine: Engine | null;
@@ -19,6 +21,10 @@ interface OrbisState {
   feeds: Record<FeedKey, FeedState>;
   selection: Selection | null;
   selectionLive: SatLive | null;
+  /** Extra facts fetched for the selected ship (name, destination, size). */
+  selectionDetail: ShipDetail | null;
+  planeFilter: PlaneFilter;
+  shipKinds: boolean[];
   iss: SatLive | null;
   quakes: Quake[];
   cloudsDate: string | null;
@@ -28,6 +34,8 @@ interface OrbisState {
   setMode(mode: Mode): void;
   toggleLayer(key: LayerKey): void;
   select(selection: Selection | null): void;
+  setPlaneFilter(filter: PlaneFilter): void;
+  toggleShipKind(kind: number): void;
 }
 
 const idle: FeedState = { status: "idle", count: 0, updated: null };
@@ -38,10 +46,13 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   progress: 0,
   ready: false,
   webglError: false,
-  layers: { satellites: true, quakes: true, fires: true, clouds: true, lights: true, borders: false },
-  feeds: { satellites: idle, quakes: idle, fires: idle, clouds: idle },
+  layers: { satellites: true, planes: true, ships: true, quakes: true, fires: true, clouds: true, lights: true, borders: false },
+  feeds: { satellites: idle, planes: idle, ships: idle, quakes: idle, fires: idle, clouds: idle },
   selection: null,
   selectionLive: null,
+  selectionDetail: null,
+  planeFilter: "all",
+  shipKinds: Array.from({ length: SHIP_KINDS }, () => true),
   iss: null,
   quakes: [],
   cloudsDate: null,
@@ -54,8 +65,17 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
     get().engine?.setLayerVisible(key, layers[key]);
   },
   select: (selection) => {
-    set({ selection, selectionLive: null });
+    set({ selection, selectionLive: null, selectionDetail: null });
     get().engine?.select(selection);
+  },
+  setPlaneFilter: (planeFilter) => {
+    set({ planeFilter });
+    get().engine?.setPlaneFilter(planeFilter);
+  },
+  toggleShipKind: (kind) => {
+    const shipKinds = get().shipKinds.map((on, i) => (i === kind ? !on : on));
+    set({ shipKinds });
+    get().engine?.setShipKind(kind, shipKinds[kind]);
   },
 }));
 

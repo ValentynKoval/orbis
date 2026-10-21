@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { busiestFireRegion, nightSpot, strongestQuake } from "./tour";
+import { busiestRegion, nightSpot, strongestQuake } from "./tour";
 import type { Quake } from "./feeds/quakes";
 
 const quake = (id: string, mag: number, time: number): Quake => ({
@@ -23,7 +23,7 @@ describe("tour", () => {
   });
 
   it("finds the box with most fire cells", () => {
-    const spot = busiestFireRegion({ lat: [-1050, -1060, -1070, 4000], lon: [2550, 2560, 2570, 1000] });
+    const spot = busiestRegion({ lat: [-1050, -1060, -1070, 4000], lon: [2550, 2560, 2570, 1000] });
     expect(spot?.lat).toBeCloseTo(-10.6, 5);
     expect(spot?.lon).toBeCloseTo(25.6, 5);
   });
