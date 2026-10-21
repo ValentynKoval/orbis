@@ -208,7 +208,7 @@ export function Landing() {
             ).map(([key, color]) => (
               <div key={key}>
                 <dt className="sr-only">{t.readout[key]}</dt>
-                <dd className={`readout font-display text-xl font-light tracking-tight md:text-3xl ${color}`}>
+                <dd className={`readout font-display text-xl font-light tracking-tight md:text-[1.75rem] ${color}`}>
                   {count(feeds[key].count, feeds[key].status)}
                 </dd>
                 <dd aria-hidden className="mt-1 text-xs leading-snug text-haze">

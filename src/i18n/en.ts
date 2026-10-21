@@ -26,8 +26,8 @@ export const en = {
     satellites: "satellites in orbit",
     planes: "aircraft in the air",
     ships: "ships at sea",
-    quakes: "earthquakes in 24 h",
-    fires: "fire hotspots in 24 h",
+    quakes: "earthquakes in 24 h",
+    fires: "fire hotspots in 24 h",
   },
   chapters: {
     orbit: {

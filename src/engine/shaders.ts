@@ -65,7 +65,7 @@ export const earthFragment = /* glsl */ `
 
     // Sun glint on open water.
     vec3 h = normalize(uSun + v);
-    float spec = pow(max(dot(n, h), 0.0), 260.0) * 1.1 + pow(max(dot(n, h), 0.0), 40.0) * 0.035;
+    float spec = pow(max(dot(n, h), 0.0), 320.0) * 0.7 + pow(max(dot(n, h), 0.0), 60.0) * 0.02;
     lit += vec3(1.0, 0.86, 0.68) * spec * water * day * (1.0 - cloud);
 
     // City lights: Black Marble luminance, sodium-warm, dimmed by cloud cover.
@@ -97,7 +97,7 @@ export const cloudsFragment = /* glsl */ `
     vec3 v = normalize(cameraPosition - vPosW);
     float ndl = dot(n, uSun);
     float mask = texture2D(uClouds, vUv).r;
-    float density = pow(smoothstep(0.06, 1.0, mask), 1.4) * 0.88;
+    float density = pow(smoothstep(0.08, 1.0, mask), 1.6) * 0.82;
     // Thin the deck as the camera descends so traffic and coastlines stay readable.
     density *= mix(0.45, 1.0, smoothstep(1.35, 3.2, length(cameraPosition)));
     float twilight = smoothstep(-0.22, 0.0, ndl) * (1.0 - smoothstep(0.0, 0.3, ndl));
@@ -198,7 +198,7 @@ export const satellitesVertex = /* glsl */ `
     bool selected = abs(float(gl_VertexID) - uSelected) < 0.5;
     vColor = selected ? vec3(1.0, 0.82, 0.42) : uColors[g];
     vAlpha = g == 1 ? 0.6 : 1.0;
-    float zoom = clamp(3.2 / -mv.z, 0.7, 2.4);
+    float zoom = clamp(3.2 / -mv.z, 0.7, 1.5);
     gl_PointSize = r2 < 0.5 ? 0.0 : (selected ? 9.0 : uSizes[g]) * uPixelRatio * zoom;
   }
 `;

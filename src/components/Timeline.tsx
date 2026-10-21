@@ -94,7 +94,8 @@ export function Timeline() {
           </div>
           <p className="readout ml-auto truncate text-right text-xs text-haze" aria-live="polite">
             <span className="text-lunar" suppressHydrationWarning>
-              {formatUtc(sim, locale)} {t.hud.utc}
+              <span className="hidden sm:inline">{formatUtc(sim, locale)}</span>
+              <span className="sm:hidden">{formatUtc(sim, locale, false).slice(0, 5)}</span> {t.hud.utc}
             </span>
             <span className="hidden sm:inline">, {offsetLabel(wall - sim, t)}</span>
           </p>

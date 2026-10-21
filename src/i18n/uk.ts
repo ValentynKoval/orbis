@@ -27,8 +27,8 @@ export const uk: Dictionary = {
     satellites: "супутників на орбіті",
     planes: "літаків у повітрі",
     ships: "суден у морі",
-    quakes: "землетрусів за 24 год",
-    fires: "осередків вогню за 24 год",
+    quakes: "землетрусів за 24 год",
+    fires: "осередків вогню за 24 год",
   },
   chapters: {
     orbit: {
