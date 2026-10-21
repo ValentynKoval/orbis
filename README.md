@@ -15,9 +15,9 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
 | **Ships at Singapore** | **The ISS with its orbit** |
 | ![Ships around the Strait of Singapore](docs/media/singapore.jpg) | ![ISS selected, its orbit drawn in gold](docs/media/iss.jpg) |
 
-| **Streets of Kyiv (Sentinel-2, 10 m)** | **The Moon from 48 Earth radii** |
+| **Manhattan from 13 km up (Sentinel-2, 10 m)** | **The Moon from 48 Earth radii** |
 | --- | --- |
-| ![Kyiv from 13 km up](docs/media/street.jpg) | ![The Moon beside the Earth](docs/media/moon.jpg) |
+| ![Manhattan from 13 km up](docs/media/street.jpg) | ![The Moon beside the Earth](docs/media/moon.jpg) |
 | **Saturn** | **The inner solar system** |
 | ![Saturn with its rings](docs/media/saturn.jpg) | ![Planets, comets and asteroids around the Sun](docs/media/system.jpg) |
 

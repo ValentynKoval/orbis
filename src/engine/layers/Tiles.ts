@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { latLonToVec } from "@/lib/geo";
+import { latLonToVec, vecToLatLon } from "@/lib/geo";
 import { providerFor, tileBounds, tileKey, type ImageryProvider } from "@/lib/tiles";
 import { earthFragment, logDepth } from "../shaders";
 
@@ -50,7 +50,8 @@ export const tilesVertex = /* glsl */ `
 /** The planet shader with the day albedo read from the tile and the rest from the global maps. */
 export const tilesFragment = earthFragment
   .replace("varying vec2 vUv;", "varying vec2 vUv;\n  varying vec2 vTileUv;\n  uniform float uFade;")
-  .replace("texture2D(uDay, vUv)", "texture2D(uDay, vTileUv)")
+  // Sentinel-2 mosaics are muted; lift them toward the Blue Marble look.
+  .replace("texture2D(uDay, vUv).rgb", "pow(texture2D(uDay, vTileUv).rgb, vec3(0.78)) * 1.5")
   .replace("gl_FragColor = vec4(lit + night + atmosphere, 1.0);", "gl_FragColor = vec4(lit + night + atmosphere, uFade);");
 
 /**
@@ -87,9 +88,6 @@ export class Tiles {
       uniforms: { ...sharedUniforms, uDay: { value: null }, uFade: { value: 1 } },
       transparent: true,
       depthWrite: true,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
     });
     this.group.renderOrder = 0.5;
   }
@@ -145,16 +143,24 @@ export class Tiles {
     return node;
   }
 
-  private visible(node: Node, cam: THREE.Vector3): boolean {
-    // Beyond the horizon: every corner and the centre face away from the camera.
-    let facing = false;
-    for (const p of [node.center, ...node.corners]) {
-      if (p.dot(cam) - p.lengthSq() > 0) {
-        facing = true;
-        break;
-      }
+  /** The point of the tile closest to the camera's foot point (tiles never cross the antimeridian). */
+  private nearest(node: Node, cam: THREE.Vector3): THREE.Vector3 {
+    const b = tileBounds(node.z, node.x, node.y);
+    const c = vecToLatLon([cam.x, cam.y, cam.z]);
+    const lat = Math.max(b.south, Math.min(b.north, c.lat));
+    let lon = c.lon;
+    if (lon < b.west || lon > b.east) {
+      const dw = Math.abs(((c.lon - b.west + 540) % 360) - 180);
+      const de = Math.abs(((c.lon - b.east + 540) % 360) - 180);
+      lon = dw < de ? b.west : b.east;
     }
-    if (!facing) return false;
+    return new THREE.Vector3(...latLonToVec(lat, lon));
+  }
+
+  private visible(node: Node, cam: THREE.Vector3): boolean {
+    // Beyond the horizon when even the tile's nearest point faces away from the camera.
+    const p = this.nearest(node, cam);
+    if (p.dot(cam) - p.lengthSq() <= 0) return false;
     return this.frustum.intersectsSphere(new THREE.Sphere(node.center, node.radius));
   }
 
@@ -164,7 +170,7 @@ export class Tiles {
     node.lastUsed = now;
     const b = tileBounds(z, x, y);
     const widthRad = ((2 * Math.PI) / 2 ** z) * Math.cos(THREE.MathUtils.degToRad((b.north + b.south) / 2));
-    const d = Math.max(1e-4, cam.distanceTo(node.center));
+    const d = Math.max(1e-5, cam.distanceTo(this.nearest(node, cam)));
     const px = (widthRad / d) * pxPerRadian;
     node.priority = px;
     const deeper = z < this.maxLevel && px > SPLIT_PX && providerFor(this.providers, z + 1);
@@ -202,6 +208,8 @@ export class Tiles {
     mesh.onBeforeRender = () => {
       material.uniforms.uDay.value = texture;
       material.uniforms.uFade.value = alpha;
+      // One material serves every tile: force the renderer to upload the changed uniforms.
+      material.uniformsNeedUpdate = true;
     };
     mesh.visible = true;
     this.drawn.add(node);
@@ -213,6 +221,9 @@ export class Tiles {
     const b = tileBounds(node.z, node.x, node.y);
     const my0 = latToMercatorSafe(b.south);
     const my1 = latToMercatorSafe(b.north);
+    // Polygon offset has no effect with a logarithmic depth buffer, so tiles sit a few tens of
+    // metres above the base sphere, deeper levels slightly higher than their parents.
+    const lift = 1 + 1e-5 + node.z * 2e-7;
     const count = (SEGMENTS + 1) ** 2;
     const pos = new Float32Array(count * 3);
     const uv = new Float32Array(count * 2);
@@ -225,7 +236,7 @@ export class Tiles {
       for (let c = 0; c <= SEGMENTS; c++) {
         const u = c / SEGMENTS;
         const lon = b.west + (b.east - b.west) * u;
-        pos.set(latLonToVec(lat, lon), i * 3);
+        pos.set(latLonToVec(lat, lon, lift), i * 3);
         uv[i * 2] = u;
         uv[i * 2 + 1] = v;
         guv[i * 2] = 0.5 + lon / 360;
@@ -240,12 +251,13 @@ export class Tiles {
         const bI = a + 1;
         const cI = a + SEGMENTS + 1;
         const dI = cI + 1;
-        index.push(a, cI, bI, bI, cI, dI);
+        // Counter-clockwise seen from outside the sphere (east is right, north is up).
+        index.push(a, bI, cI, bI, dI, cI);
       }
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    geometry.setAttribute("normal", new THREE.BufferAttribute(pos.slice(), 3));
+    geometry.setAttribute("normal", new THREE.BufferAttribute(pos.map((v) => v / lift), 3));
     geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
     geometry.setAttribute("aGlobalUv", new THREE.BufferAttribute(guv, 2));
     geometry.setIndex(index);

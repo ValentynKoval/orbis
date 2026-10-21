@@ -39,7 +39,7 @@ for (const [name, at] of [
 }
 
 for (const [name, query] of [
-  ["street", "at=50.4501,30.5234,1.0022"],
+  ["street", "at=40.7128,-74.0060,1.0022"],
   ["moon", "at=12,-70,48"],
   ["saturn", "space=saturn&at=18,40,0.0036"],
   ["system", "space=earth&at=35,120,3.2"],

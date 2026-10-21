@@ -87,7 +87,10 @@ export const earthFragment = /* glsl */ `
 
     // Oceans read deeper and slightly bluer than the Blue Marble original.
     albedo = mix(albedo, albedo * vec3(0.55, 0.75, 1.05), water * 0.6);
-    vec3 lit = albedo * (max(ndl, 0.0) * 1.35 + 0.012) * (1.0 - 0.5 * shadow);
+    // Close to the ground the night side gets a soft ambient so streets stay readable, and the
+    // 10 km-per-texel city-lights map, which would smear into a blob, fades out.
+    float close = 1.0 - smoothstep(1.02, 1.45, length(cameraPosition));
+    vec3 lit = albedo * (max(ndl, 0.0) * 1.35 + mix(0.012, 0.32, close)) * (1.0 - 0.5 * shadow);
     lit += albedo * vec3(1.0, 0.42, 0.12) * twilight * 0.22;
 
     // Sun glint on open water.
@@ -98,7 +101,7 @@ export const earthFragment = /* glsl */ `
     // City lights: Black Marble luminance, sodium-warm, dimmed by cloud cover.
     float lights = texture2D(uNight, vUv).r;
     lights = pow(lights, 2.4) * 3.2;
-    vec3 night = vec3(1.0, 0.68, 0.36) * lights * (1.0 - day) * uLights * (1.0 - 0.75 * cloud);
+    vec3 night = vec3(1.0, 0.68, 0.36) * lights * (1.0 - day) * uLights * (1.0 - 0.75 * cloud) * (1.0 - 0.9 * close);
 
     // Thin atmosphere seen through the limb.
     float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0);
