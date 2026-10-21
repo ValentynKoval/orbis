@@ -38,6 +38,20 @@ for (const [name, at] of [
   await page.close();
 }
 
+for (const [name, query] of [
+  ["street", "at=50.4501,30.5234,1.0022"],
+  ["moon", "at=12,-70,48"],
+  ["saturn", "space=saturn&at=18,40,0.0036"],
+  ["system", "space=earth&at=35,120,3.2"],
+]) {
+  page = await desktop.newPage();
+  await page.goto(`${base}/en/live?${query}`);
+  await ready(page);
+  await settle(page, 12000);
+  await page.screenshot({ path: path.join(out, `${name}.jpg`), quality: 86, type: "jpeg" });
+  await page.close();
+}
+
 page = await desktop.newPage();
 await page.goto(`${base}/en/live?at=30,0,4.4`);
 await ready(page);

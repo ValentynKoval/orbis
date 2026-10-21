@@ -1,9 +1,10 @@
 import type { Quake } from "@/lib/feeds/quakes";
 import type { SatGroup } from "@/lib/feeds/satellites";
+import type { Pass } from "@/lib/passes";
 
-export type LayerKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "clouds" | "lights" | "borders";
+export type LayerKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "aurora" | "clouds" | "lights" | "borders";
 
-export type FeedKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "clouds";
+export type FeedKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "clouds" | "aurora";
 export type FeedState = { status: "idle" | "loading" | "ready" | "error"; count: number; updated: number | null };
 
 export type Selection =
@@ -31,7 +32,8 @@ export type SatWorkerRequest =
   | { type: "load"; text: string }
   | { type: "propagate"; time: number }
   | { type: "detail"; index: number; time: number; tag: string }
-  | { type: "orbit"; index: number; time: number };
+  | { type: "orbit"; index: number; time: number }
+  | { type: "passes"; lat: number; lon: number; from: number; hours: number; tag: string };
 
 export type SatWorkerResponse =
   | {
@@ -45,4 +47,5 @@ export type SatWorkerResponse =
     }
   | { type: "state"; time: number; pos: Float32Array; vel: Float32Array }
   | { type: "detail"; tag: string; index: number; ok: boolean; lat: number; lon: number; altKm: number; speedKms: number }
-  | { type: "orbit"; index: number; time: number; points: Float32Array };
+  | { type: "orbit"; index: number; time: number; points: Float32Array }
+  | { type: "passes"; tag: string; passes: Pass[] };

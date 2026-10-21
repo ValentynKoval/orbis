@@ -11,6 +11,9 @@ import type { Quake } from "../feeds/quakes";
 import type { FireGrid } from "../feeds/fires";
 import type { TleRecord } from "../feeds/satellites";
 import { findSatellite, satelliteState } from "./satellites";
+import { predictPasses, compass } from "../passes";
+import { AU_KM, moonPosition, planetPosition, PLANETS, type Planet } from "../orbits";
+import type { CloseApproach } from "../feeds/bodies";
 
 const API = "https://generativelanguage.googleapis.com/v1beta/models";
 const MAX_TURNS = 4;
@@ -21,6 +24,7 @@ export interface AnalystData {
   ships(): Promise<{ snap: ShipSnapshot; names: Map<number, string> }>;
   quakes(): Promise<Quake[]>;
   fires(): Promise<FireGrid>;
+  approaches(): Promise<CloseApproach[]>;
 }
 
 const bbox = {
@@ -82,6 +86,26 @@ const TOOLS = [
     parameters: { type: "OBJECT", properties: { bbox, limit: { type: "INTEGER", description: "1–5" } } },
   },
   {
+    name: "get_iss_passes",
+    description: "When the ISS will pass over a place in the next 48 h: times (UTC), peak elevation, direction, and whether it will be visible to the naked eye.",
+    parameters: { type: "OBJECT", properties: { lat: { type: "NUMBER" }, lon: { type: "NUMBER" } }, required: ["lat", "lon"] },
+  },
+  {
+    name: "get_close_approaches",
+    description: "Asteroids passing within 0.05 AU of Earth in the coming 60 days (NASA/JPL): name, date, distance in lunar distances, size.",
+    parameters: { type: "OBJECT", properties: { limit: { type: "INTEGER", description: "1–10" } } },
+  },
+  {
+    name: "get_planet",
+    description: "Current distance of a planet or the Moon from Earth and from the Sun, and the light travel time.",
+    parameters: { type: "OBJECT", properties: { name: { type: "STRING", enum: ["mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune", "moon"] } }, required: ["name"] },
+  },
+  {
+    name: "show_body",
+    description: "Switch to the solar-system view and fly the camera to a planet, the Moon or the Sun.",
+    parameters: { type: "OBJECT", properties: { name: { type: "STRING", enum: ["sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune"] } }, required: ["name"] },
+  },
+  {
     name: "fly_to",
     description: "Move the camera to a place on the globe. Use it whenever the answer is about a place or object.",
     parameters: {
@@ -128,6 +152,7 @@ function systemPrompt(req: AnalystRequest, now: number) {
     `Answer in ${language}, in at most three short sentences, plain text without markdown.`,
     "For any question about what is happening now, call the data tools first and answer only from their results; never invent objects or numbers.",
     "When the answer points at one object, call select_object (or select_satellite) so the user sees it; when it is about an area, call fly_to.",
+    "Planets, the Moon and the Sun: use get_planet for numbers and show_body to display them; for asteroids near Earth use get_close_approaches; for 'when can I see the ISS' use get_iss_passes with the place's coordinates.",
     "For a satellite, call get_satellite for its position, then select_satellite. МКС is Ukrainian for the ISS (International Space Station).",
     "Always finish with a short spoken answer, even after moving the camera.",
     "Convert regions to bounding boxes yourself, e.g. Europe 35..71N −25..45E, Ukraine 44..52.5N 22..40.5E, North Atlantic 35..65N −60..−10E, Japan 30..46N 129..146E.",
@@ -209,6 +234,30 @@ async function execute(name: string, args: Record<string, unknown>, data: Analys
       const rec = findSatellite(await data.satellites(), String(args.name ?? ""));
       return rec ? (satelliteState(rec, now) ?? { error: "no valid orbit" }) : { error: "not found" };
     }
+    case "get_iss_passes": {
+      const iss = findSatellite(await data.satellites(), "ISS");
+      if (!iss) return { error: "no ISS elements" };
+      return {
+        passes: predictPasses(iss.line1, iss.line2, Number(args.lat), Number(args.lon), now, 48)
+          .slice(0, 6)
+          .map((p) => ({ peak_utc: new Date(p.max).toISOString(), max_elevation_deg: p.maxElevation, from: compass(p.startAzimuth), to: compass(p.endAzimuth), duration_min: Math.round((p.end - p.start) / 60_000), naked_eye_visible: p.visible })),
+      };
+    }
+    case "get_close_approaches": {
+      const list = (await data.approaches()).filter((a) => a.time > now - 86_400_000);
+      return { count: list.length, approaches: list.slice(0, Math.max(1, Math.min(10, Number(args.limit) || 6))).map((a) => ({ name: a.name, time_utc: new Date(a.time).toISOString(), distance_lunar: a.distanceLd, distance_km: a.distanceKm, speed_kms: a.velocityKms, diameter_m: a.diameterM })) };
+    }
+    case "get_planet": {
+      const name = String(args.name);
+      const earth = planetPosition("earth", now);
+      const p = name === "moon" ? moonPosition(now).map((v, i) => v + earth[i]) : PLANETS.includes(name as Planet) ? planetPosition(name as Planet, now) : null;
+      if (!p) return { error: "unknown body" };
+      const fromEarth = Math.hypot(p[0] - earth[0], p[1] - earth[1], p[2] - earth[2]);
+      return { name, from_earth_km: Math.round(fromEarth * AU_KM), from_earth_au: +fromEarth.toFixed(4), from_sun_au: +Math.hypot(p[0], p[1], p[2]).toFixed(4), light_time_min: +((fromEarth * AU_KM) / 299_792.458 / 60).toFixed(1) };
+    }
+    case "show_body":
+      actions.push({ type: "body", id: String(args.name) });
+      return { status: "done" };
     case "get_aircraft":
       return queryAircraft(await data.planes(), { ...args, bbox: box });
     case "get_ships": {

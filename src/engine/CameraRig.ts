@@ -2,8 +2,6 @@ import * as THREE from "three";
 import { latLonToVec } from "@/lib/geo";
 import type { CameraPose } from "./types";
 
-const MIN_DIST = 1.12;
-const MAX_DIST = 30;
 
 function wrap(lon: number) {
   return ((((lon + 180) % 360) + 360) % 360) - 180;
@@ -15,6 +13,11 @@ function wrap(lon: number) {
  * fly-tos and scroll-driven choreography from one mechanism.
  */
 export class CameraRig {
+  /** Closest approach to the centre, in Earth radii; set from the deepest imagery available. */
+  minDist = 1.0012;
+  maxDist = 70;
+  /** Radius of the body being orbited: zoom and drag speeds scale with the altitude above it. */
+  radius = 1;
   readonly pose: CameraPose = { lat: 18, lon: 20, dist: 4.4 };
   readonly goal: CameraPose = { lat: 18, lon: 20, dist: 4.4 };
   /** Horizontal shift of the globe as a fraction of the viewport width (positive = right). */
@@ -93,7 +96,7 @@ export class CameraRig {
       if (!this.flyUntil) this.goal.lon += this.autoRotate * dt;
     }
     this.goal.lat = THREE.MathUtils.clamp(this.goal.lat, -84, 84);
-    this.goal.dist = THREE.MathUtils.clamp(this.goal.dist, MIN_DIST, MAX_DIST);
+    this.goal.dist = THREE.MathUtils.clamp(this.goal.dist, this.minDist, this.maxDist);
 
     const k = 1 - Math.exp(-dt * this.stiffness);
     this.pose.lat += (this.goal.lat - this.pose.lat) * k;
@@ -123,7 +126,7 @@ export class CameraRig {
   /** Degrees of rotation per pixel of drag, scaled so the surface tracks the finger. */
   private dragScale() {
     const fov = THREE.MathUtils.degToRad(this.camera.fov);
-    const visible = 2 * Math.tan(fov / 2) * (this.pose.dist - 1);
+    const visible = 2 * Math.tan(fov / 2) * (this.pose.dist - this.radius);
     return THREE.MathUtils.radToDeg(visible / this.el.clientHeight) * 0.95;
   }
 
@@ -159,8 +162,8 @@ export class CameraRig {
       const [a, b] = [...this.pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       if (this.pinchDist > 0) {
-        const altitude = this.goal.dist - 1;
-        this.goal.dist = 1 + altitude * (this.pinchDist / d);
+        const altitude = this.goal.dist - this.radius;
+        this.goal.dist = this.radius + altitude * (this.pinchDist / d);
       }
       this.pinchDist = d;
       this.onUserMove?.();
@@ -203,9 +206,9 @@ export class CameraRig {
   private handleWheel = (e: WheelEvent) => {
     if (!this.interactive) return;
     e.preventDefault();
-    const altitude = this.goal.dist - 1;
+    const altitude = this.goal.dist - this.radius;
     const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-    this.goal.dist = 1 + altitude * Math.exp(delta * 0.0012);
+    this.goal.dist = this.radius + altitude * Math.exp(delta * 0.0012);
     this.flyUntil = 0;
     this.stiffness = 8;
     this.onUserMove?.();

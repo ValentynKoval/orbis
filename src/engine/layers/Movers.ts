@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { moveAlong, type Vec3 } from "@/lib/geo";
-import { moversFragment, moversVertex } from "../shaders";
+import { moversFragment, moversVertex, logDepth } from "../shaders";
 
 /** One moving object as the layer needs it; layers convert from wire formats into this. */
 export interface MoverInput {
@@ -55,8 +55,7 @@ export class Movers {
     this.geometry.setAttribute("uv", plane.getAttribute("uv"));
     this.kindOn = options.colors.map(() => 1);
     this.material = new THREE.ShaderMaterial({
-      vertexShader: moversVertex(options.colors.length),
-      fragmentShader: moversFragment(options.icon),
+      ...logDepth(moversVertex(options.colors.length), moversFragment(options.icon)),
       uniforms: {
         uNow: { value: 0 },
         uSwitch: { value: -1e9 },

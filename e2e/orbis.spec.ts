@@ -100,3 +100,34 @@ test("case study explains the build in both languages", async ({ page }) => {
   await page.goto("/uk/case");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Жива планета з нульовим бюджетом");
 });
+
+test.describe("beyond the Earth", () => {
+  test("zooms out into the solar system and back", async ({ page, isMobile }) => {
+    test.skip(isMobile, "the bodies list is a desktop panel; phones use the labels");
+    await page.goto("/en/live");
+    await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
+    await page.getByRole("button", { name: "Solar system" }).click();
+    const list = page.getByRole("region", { name: "Solar system", exact: true });
+    await expect(list).toBeVisible();
+    await list.getByRole("button", { name: "Saturn" }).click();
+    await expect(page.getByRole("complementary", { name: "Saturn" })).toContainText(/From the Sun/);
+    await page.getByRole("button", { name: "Back to Earth" }).first().click();
+    await expect(page.getByRole("region", { name: "Timeline, last 24 hours" })).toBeVisible({ timeout: 30_000 });
+  });
+
+  test("lists ISS passes for the view centre", async ({ page }) => {
+    await page.goto("/en/live?at=50.45,30.52,2");
+    await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
+    await page.getByRole("button", { name: "Above me" }).click();
+    await page.getByRole("button", { name: "Use the view centre" }).click();
+    const panel = page.getByRole("region", { name: "The sky above you" });
+    await expect(panel).toContainText(/up to \d+°/, { timeout: 60_000 });
+  });
+
+  test("the aurora layer reports Kp", async ({ page, isMobile }) => {
+    await page.goto("/en/live");
+    await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
+    if (isMobile) await page.getByRole("button", { name: "Show layers" }).click();
+    await expect(page.getByRole("switch", { name: /Aurora/ })).toContainText(/Kp \d/, { timeout: 60_000 });
+  });
+});

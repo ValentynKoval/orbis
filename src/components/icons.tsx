@@ -95,3 +95,32 @@ export function Wave({ className, on }: IconProps & { on: boolean }) {
     </svg>
   );
 }
+
+/** The solar system: a sun with one orbit. */
+export function Orbit({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <circle cx="12" cy="12" r="2.6" />
+      <ellipse cx="12" cy="12" rx="9.5" ry="4.2" transform="rotate(-20 12 12)" />
+      <circle cx="20.2" cy="8.6" r="1.1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function Compass({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="m15.2 8.8-2.1 5.3-4.3 1.1 2.1-5.3z" />
+    </svg>
+  );
+}
+
+export function Link({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M10 14a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1 1" />
+      <path d="M14 10a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1-1" />
+    </svg>
+  );
+}

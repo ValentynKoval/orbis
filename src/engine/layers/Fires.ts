@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { latLonToVec } from "@/lib/geo";
 import type { FireGrid } from "@/lib/feeds/fires";
-import { firesFragment, firesVertex } from "../shaders";
+import { firesFragment, firesVertex, logDepth } from "../shaders";
 
 export class Fires {
   readonly points: THREE.Points;
@@ -13,8 +13,7 @@ export class Fires {
 
   constructor(pixelRatio: number) {
     this.material = new THREE.ShaderMaterial({
-      vertexShader: firesVertex,
-      fragmentShader: firesFragment,
+      ...logDepth(firesVertex, firesFragment),
       uniforms: { uNow: { value: 0 }, uClock: { value: 0 }, uPixelRatio: { value: pixelRatio }, uOpacity: { value: 1 } },
       transparent: true,
       depthWrite: false,

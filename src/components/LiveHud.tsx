@@ -11,6 +11,10 @@ import { useNow } from "./hooks";
 import { Analyst } from "./Analyst";
 import { Search } from "./Search";
 import { Timeline } from "./Timeline";
+import { SystemHud } from "./SystemHud";
+import { Sky } from "./Sky";
+import { Share } from "./Share";
+import { Orbit } from "./icons";
 import { TopBar } from "./TopBar";
 
 const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
@@ -19,6 +23,7 @@ const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
   { key: "ships", feed: "ships", swatch: "bg-aurora" },
   { key: "quakes", feed: "quakes", swatch: "bg-seismic" },
   { key: "fires", feed: "fires", swatch: "bg-ember" },
+  { key: "aurora", feed: "aurora", swatch: "bg-[#5cf27a]" },
   { key: "clouds", feed: "clouds", swatch: "bg-cloud" },
   { key: "lights", swatch: "bg-glow" },
   { key: "borders", swatch: "bg-foil" },
@@ -27,6 +32,7 @@ const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
 export function LiveHud() {
   const engine = useOrbis((s) => s.engine);
   const selection = useOrbis((s) => s.selection);
+  const space = useOrbis((s) => s.space);
   const [panelOpen, setPanelOpen] = useState(false);
   const t = useDict();
 
@@ -37,10 +43,26 @@ export function LiveHud() {
     engine.setFocus(null);
     engine.rig.setAutoRotate(0);
     engine.rig.setOffset(0, 0);
-    // Shareable views: /live?at=lat,lon,distance (distance in Earth radii from the centre).
-    const at = new URLSearchParams(window.location.search).get("at")?.split(",").map(Number);
-    if (at && at.length >= 2 && at.every(Number.isFinite)) engine.rig.flyTo({ lat: at[0], lon: at[1], dist: at[2] || 2.4 }, 2);
+    // Shareable views: /live?at=lat,lon,distance&t=unixms&layers=a,b&space=mars (see Share.tsx).
+    const params = new URLSearchParams(window.location.search);
+    const at = params.get("at")?.split(",").map(Number);
+    const layers = params.get("layers");
+    if (layers !== null) {
+      const on = new Set(layers.split(",").filter(Boolean));
+      const store = useOrbis.getState();
+      for (const key of Object.keys(store.layers) as LayerKey[]) if (store.layers[key] !== on.has(key)) store.toggleLayer(key);
+    }
+    const t0 = Number(params.get("t"));
+    const spaceParam = params.get("space");
+    if (spaceParam) {
+      engine.enterSystem();
+      const major = ["sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune"] as const;
+      const id = major.find((m) => m === spaceParam);
+      if (id && id !== "earth") useOrbis.getState().focusOn({ kind: "major", id });
+      if (at && at.length >= 3 && at.every(Number.isFinite)) engine.system.rig.flyTo({ lat: at[0], lon: at[1], dist: at[2] }, 2.5);
+    } else if (at && at.length >= 2 && at.every(Number.isFinite)) engine.rig.flyTo({ lat: at[0], lon: at[1], dist: at[2] || 2.4 }, 2);
     else engine.rig.flyTo({ dist: Math.min(Math.max(engine.rig.goal.dist, 3.4), 5.2) }, 1.4);
+    if (Number.isFinite(t0) && t0 > 0) engine.setTime(t0, 0);
     return () => engine.setInteractive(false);
   }, [engine]);
 
@@ -56,12 +78,27 @@ export function LiveHud() {
     <div className="pointer-events-none fixed inset-0 z-10">
       <TopBar live />
       <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 max-sm:top-[calc(max(1rem,env(safe-area-inset-top))+4rem)]">
-        <Analyst />
-        <Search />
+        {space === "earth" && <Analyst />}
+        {space === "earth" && <Sky />}
+        {space === "earth" && <Search />}
+        <Share />
+        <button
+          type="button"
+          onClick={() => (space === "earth" ? engine?.enterSystem(true) : engine?.returnToEarth())}
+          className="bezel pointer-events-auto rounded-full p-1"
+          aria-label={space === "earth" ? t.system.open : t.system.backToEarth}
+        >
+          <span className={`bezel-core flex items-center gap-2 rounded-full px-3.5 py-2.5 text-sm ${space === "system" ? "text-foil" : "text-lunar"}`}>
+            <Orbit className="size-4" />
+            <span className="hidden xl:inline">{space === "earth" ? t.system.open : t.system.backToEarth}</span>
+          </span>
+        </button>
       </div>
+      {space === "system" && <SystemHud />}
       <h1 className="sr-only">{t.nav.live}</h1>
 
       {/* Layers: a side panel on wide screens, a sheet behind a button on phones. */}
+      {space === "earth" && (
       <div className="absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] left-4 flex flex-col items-start gap-3 md:top-24 md:bottom-auto">
         <button
           type="button"
@@ -79,11 +116,12 @@ export function LiveHud() {
           <LayerPanel />
         </div>
       </div>
+      )}
 
-      {selection && <ObjectCard key={cardKey(selection)} selection={selection} />}
+      {space === "earth" && selection && <ObjectCard key={cardKey(selection)} selection={selection} />}
 
-      <Timeline />
-      <Footnote />
+      {space === "earth" && <Timeline />}
+      {space === "earth" && <Footnote />}
     </div>
   );
 }
@@ -137,6 +175,7 @@ function LayerPanel() {
   const feeds = useOrbis((s) => s.feeds);
   const toggle = useOrbis((s) => s.toggleLayer);
   const engine = useOrbis((s) => s.engine);
+  const kp = useOrbis((s) => s.auroraKp);
 
   return (
     <section aria-label={t.hud.layers} className="bezel pointer-events-auto w-[min(19rem,calc(100vw-2rem))]">
@@ -150,9 +189,13 @@ function LayerPanel() {
                 ? t.hud.status.error
                 : state?.status === "loading" || state?.status === "idle"
                   ? t.hud.status.loading
-                  : state && key !== "clouds"
-                    ? formatNumber(state.count, locale)
-                    : "";
+                  : key === "aurora"
+                    ? kp === null
+                      ? ""
+                      : `Kp ${formatNumber(kp, locale, 1)}`
+                    : state && key !== "clouds"
+                      ? formatNumber(state.count, locale)
+                      : "";
             return (
               <li key={key}>
                 <button

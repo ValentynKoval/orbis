@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { latLonToVec } from "@/lib/geo";
 import type { Quake } from "@/lib/feeds/quakes";
-import { quakesFragment, quakesVertex } from "../shaders";
+import { quakesFragment, quakesVertex, logDepth } from "../shaders";
 
 /** Instanced surface decals: a bright epicentre and rings that ripple outward, fading with age. */
 export class Quakes {
@@ -18,8 +18,7 @@ export class Quakes {
     this.geometry.setAttribute("position", plane.getAttribute("position"));
     this.geometry.setAttribute("uv", plane.getAttribute("uv"));
     this.material = new THREE.ShaderMaterial({
-      vertexShader: quakesVertex,
-      fragmentShader: quakesFragment,
+      ...logDepth(quakesVertex, quakesFragment),
       uniforms: { uNow: { value: 0 }, uClock: { value: 0 }, uOpacity: { value: 1 }, uZoom: { value: 1 } },
       transparent: true,
       depthWrite: false,

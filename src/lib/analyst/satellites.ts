@@ -1,5 +1,5 @@
 /** Server-side satellite lookup for the analyst: current position of a named satellite via SGP4. */
-import { eciToGeodetic, gstime, sgp4, twoline2satrec } from "../../engine/workers/sgp4-core";
+import { eciToGeodetic, gstime, sgp4, twoline2satrec } from "../sgp4";
 import { parseTle, type TleRecord } from "../feeds/satellites";
 import { search } from "../search";
 

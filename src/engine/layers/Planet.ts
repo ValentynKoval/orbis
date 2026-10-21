@@ -8,6 +8,7 @@ import {
   earthVertex,
   starsFragment,
   starsVertex,
+  logDepth,
 } from "../shaders";
 
 const ATMOSPHERE_OUTER = 1.065;
@@ -32,8 +33,7 @@ export class Planet {
 
     const sphere = new THREE.SphereGeometry(1, segments, segments / 2);
     this.earthMaterial = new THREE.ShaderMaterial({
-      vertexShader: earthVertex,
-      fragmentShader: earthFragment,
+      ...logDepth(earthVertex, earthFragment),
       uniforms: {
         uDay: { value: this.blank },
         uNight: { value: this.blank },
@@ -48,8 +48,7 @@ export class Planet {
     this.earth.renderOrder = 0;
 
     this.cloudsMaterial = new THREE.ShaderMaterial({
-      vertexShader: earthVertex,
-      fragmentShader: cloudsFragment,
+      ...logDepth(earthVertex, cloudsFragment),
       uniforms: { uClouds: { value: this.blank }, uSun: { value: sun }, uOpacity: { value: 1 } },
       transparent: true,
       depthWrite: false,
@@ -59,8 +58,7 @@ export class Planet {
     this.clouds.renderOrder = 1;
 
     this.atmosphereMaterial = new THREE.ShaderMaterial({
-      vertexShader: atmosphereVertex,
-      fragmentShader: atmosphereFragment,
+      ...logDepth(atmosphereVertex, atmosphereFragment),
       uniforms: { uSun: { value: sun }, uOuter: { value: ATMOSPHERE_OUTER } },
       side: THREE.BackSide,
       transparent: true,
@@ -72,13 +70,12 @@ export class Planet {
     this.atmosphere.renderOrder = 6;
 
     this.starsMaterial = new THREE.ShaderMaterial({
-      vertexShader: starsVertex,
-      fragmentShader: starsFragment,
+      ...logDepth(starsVertex, starsFragment),
       uniforms: { uPixelRatio: { value: pixelRatio }, uOpacity: { value: 1 } },
       transparent: true,
       depthWrite: false,
     });
-    this.stars = new THREE.Points(makeStars(5200), this.starsMaterial);
+    this.stars = new THREE.Points(makeStarsGeometry(5200, 90), this.starsMaterial);
     this.stars.renderOrder = -1;
     this.stars.frustumCulled = false;
   }
@@ -156,7 +153,7 @@ export class Planet {
 }
 
 /** Procedural sky: a few bright stars, many faint ones, a hint of the galactic band. */
-function makeStars(count: number) {
+export function makeStarsGeometry(count: number, radius: number) {
   const pos = new Float32Array(count * 3);
   const mag = new Float32Array(count);
   const color = new Float32Array(count * 3);
@@ -175,7 +172,7 @@ function makeStars(count: number) {
     if (i % 3 === 0) u = u * 0.18;
     const s = Math.sqrt(1 - u * u);
     const v = new THREE.Vector3(s * Math.cos(t), u, s * Math.sin(t)).applyAxisAngle(new THREE.Vector3(1, 0, 0.3).normalize(), 1.05);
-    pos.set([v.x * 90, v.y * 90, v.z * 90], i * 3);
+    pos.set([v.x * radius, v.y * radius, v.z * radius], i * 3);
     mag[i] = Math.pow(rand(), 9);
     color.set(tints[Math.floor(rand() * tints.length)], i * 3);
   }
@@ -184,4 +181,18 @@ function makeStars(count: number) {
   g.setAttribute("aMag", new THREE.BufferAttribute(mag, 1));
   g.setAttribute("aColor", new THREE.BufferAttribute(color, 3));
   return g;
+}
+
+/** A ready-to-add star field for another scene. */
+export function makeStars(count: number, radius: number): THREE.Points {
+  const material = new THREE.ShaderMaterial({
+    ...logDepth(starsVertex, starsFragment),
+    uniforms: { uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) }, uOpacity: { value: 1 } },
+    transparent: true,
+    depthWrite: false,
+  });
+  const points = new THREE.Points(makeStarsGeometry(count, radius), material);
+  points.frustumCulled = false;
+  points.renderOrder = -1;
+  return points;
 }

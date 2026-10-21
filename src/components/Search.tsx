@@ -69,8 +69,8 @@ export function Search() {
       >
         <span className="bezel-core flex items-center gap-2 rounded-full px-3.5 py-2.5 text-sm text-haze">
           <Magnifier className="size-4 text-lunar" />
-          <span className="hidden lg:inline">{t.search.open}</span>
-          <kbd className="hidden rounded-md border border-hairline px-1.5 text-[11px] text-dim lg:inline">/</kbd>
+          <span className="hidden 2xl:inline">{t.search.open}</span>
+          <kbd className="hidden rounded-md border border-hairline px-1.5 text-[11px] text-dim 2xl:inline">/</kbd>
         </span>
       </button>
 

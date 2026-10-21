@@ -1,0 +1,61 @@
+name: Refresh data branch
+
+# Everything the site reads from the `data` branch: CelesTrak element sets
+# (one client, one download per 2-hour update, as CelesTrak requires) and the
+# cloud mask built from NASA GIBS. Runs every two hours; clouds are rebuilt
+# when their mosaic date changed.
+on:
+  schedule:
+    - cron: "23 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-branch
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: data
+          path: data
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --omit=dev --ignore-scripts && npm rebuild sharp
+
+      - name: Download active satellites
+        run: |
+          mkdir -p data/celestrak
+          code=$(curl -sS -A "Orbis/1.0 (+https://github.com/${{ github.repository }})" \
+            -o /tmp/active.tle -w '%{http_code}' \
+            'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle')
+          echo "HTTP $code"
+          if [ "$code" = "200" ] && grep -q '^1 ' /tmp/active.tle; then
+            mv /tmp/active.tle data/celestrak/active.tle
+            echo "$(grep -c '^1 ' data/celestrak/active.tle) element sets"
+          fi
+
+      - name: Build cloud mask
+        run: |
+          want=$(date -u -d yesterday +%F)
+          have=$(node -e "try{console.log(require('./data/clouds/meta.json').date)}catch{console.log('')}")
+          if [ "$want" = "$have" ]; then echo "clouds up to date ($have)"; exit 0; fi
+          node scripts/cloud-mask.mjs data/clouds || echo "cloud mask failed; keeping the previous one"
+
+      - name: Commit
+        run: |
+          cd data
+          git config user.name "orbis-data-bot"
+          git config user.email "orbis-data-bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "no changes" && exit 0
+          git commit -q -m "Refresh data $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push

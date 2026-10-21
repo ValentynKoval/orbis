@@ -29,6 +29,12 @@ async function perform(engine: Engine, actions: AnalystAction[]) {
       engine.rig.flyTo({ lat: action.lat, lon: action.lon, dist: ZOOM[action.zoom] }, 1.8);
     } else if (action.type === "select") {
       await engine.focusResult(action.kind, action.kind === "ship" ? Number(action.id) : action.id);
+    } else if (action.type === "body") {
+      const major = ["sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune"] as const;
+      const id = major.find((m) => m === action.id);
+      if (!id) continue;
+      engine.enterSystem();
+      useOrbis.getState().focusOn({ kind: "major", id });
     } else if (action.type === "select_satellite") {
       const hits = search(action.name, (await engine.searchCandidates()).filter((c) => c.kind === "satellite"), 1);
       if (hits[0]) await engine.focusResult("satellite", hits[0].key);
@@ -64,6 +70,7 @@ export function Analyst() {
     setBusy(true);
     // Answers describe the present, so leave any replay first.
     if (!useOrbis.getState().time.live) engine.goLive();
+    if (engine.space === "system") engine.exitSystem();
     const centre = vecToLatLon(latLonToVec(engine.rig.pose.lat, engine.rig.pose.lon));
     try {
       const res = await fetch("/api/analyst", {
@@ -100,7 +107,7 @@ export function Analyst() {
       >
         <span className={`bezel-core flex items-center gap-2 rounded-full px-3.5 py-2.5 text-sm ${open ? "text-foil" : "text-lunar"}`}>
           <Spark className="size-4" />
-          <span className="hidden sm:inline">{t.analyst.open}</span>
+          <span className="hidden 2xl:inline">{t.analyst.open}</span>
         </span>
       </button>
 

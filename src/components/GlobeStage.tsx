@@ -33,7 +33,7 @@ export function GlobeStage() {
       const mode = useOrbis.getState().mode;
       engine.setInteractive(mode === "live");
       useOrbis.getState().setEngine(engine);
-      if (process.env.NODE_ENV !== "production") Object.assign(window, { __orbisEngine: engine });
+      if (process.env.NODE_ENV !== "production") Object.assign(window, { __orbisEngine: engine, __orbisStore: useOrbis });
       engine.start().catch(() => useOrbis.setState({ webglError: true }));
     });
     return () => {

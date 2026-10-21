@@ -5,6 +5,7 @@ import type { AnalystRequest, AnalystResponse } from "@/lib/analyst/protocol";
 import type { PlaneSnapshot, ShipSnapshot } from "@/lib/feeds/live";
 import type { Quake } from "@/lib/feeds/quakes";
 import type { FireGrid } from "@/lib/feeds/fires";
+import type { CloseApproach } from "@/lib/feeds/bodies";
 import { parseTle } from "@/lib/feeds/satellites";
 
 export const maxDuration = 60;
@@ -84,6 +85,7 @@ export async function POST(request: NextRequest) {
       }),
     quakes: () => cached("quakes", 60_000, () => getJson<{ quakes: Quake[] }>(`${origin}/api/quakes`).then((d) => d.quakes)),
     fires: () => cached("fires", 600_000, () => getJson<FireGrid>(`${origin}/api/fires`)),
+    approaches: () => cached("approaches", 3_600_000, () => getJson<{ approaches: CloseApproach[] }>(`${origin}/api/approaches`).then((d) => d.approaches)),
   };
 
   try {

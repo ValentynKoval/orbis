@@ -4,13 +4,15 @@
  * main thread receives inertial positions and velocities in scene units
  * (Earth radii) and extrapolates between updates on the GPU.
  */
-import { eciToGeodetic, gstime, sgp4, twoline2satrec, type SatRec } from "./sgp4-core";
+import { eciToGeodetic, gstime, sgp4, twoline2satrec, type SatRec } from "@/lib/sgp4";
+import { predictPasses } from "@/lib/passes";
 import { classify, ISS_NORAD, parseTle } from "@/lib/feeds/satellites";
 import type { SatWorkerRequest, SatWorkerResponse } from "../types";
 
 const R = 6371;
 const MS_PER_DAY = 86_400_000;
 let sats: SatRec[] = [];
+let issLines: [string, string] | null = null;
 
 const post = (msg: SatWorkerResponse, transfer: Transferable[] = []) =>
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(msg, transfer);
@@ -31,6 +33,7 @@ self.onmessage = (event: MessageEvent<SatWorkerRequest>) => {
   switch (msg.type) {
     case "load": {
       const records = parseTle(msg.text);
+      issLines = null;
       const kept: SatRec[] = [];
       const names: string[] = [];
       const norad: number[] = [];
@@ -41,6 +44,7 @@ self.onmessage = (event: MessageEvent<SatWorkerRequest>) => {
         try {
           const sat = twoline2satrec(rec.line1, rec.line2);
           if (sat.error) continue;
+          if (rec.norad === ISS_NORAD) issLines = [rec.line1, rec.line2];
           kept.push(sat);
           names.push(rec.name);
           norad.push(rec.norad);
@@ -102,6 +106,11 @@ self.onmessage = (event: MessageEvent<SatWorkerRequest>) => {
         altKm: geo.height,
         speedKms: Math.hypot(v.x, v.y, v.z),
       });
+      break;
+    }
+    case "passes": {
+      const passes = issLines ? predictPasses(issLines[0], issLines[1], msg.lat, msg.lon, msg.from, msg.hours) : [];
+      post({ type: "passes", tag: msg.tag, passes });
       break;
     }
     case "orbit": {

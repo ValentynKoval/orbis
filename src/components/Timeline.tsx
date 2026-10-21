@@ -116,6 +116,7 @@ export function Timeline() {
           </div>
           <input
             type="range"
+            suppressHydrationWarning
             className="timeline-range absolute inset-0 w-full"
             min={start}
             max={wall}

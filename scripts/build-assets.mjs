@@ -28,7 +28,7 @@ async function download(url, name) {
   const file = path.join(CACHE, name);
   if (await exists(file)) return file;
   process.stdout.write(`  downloading ${name}… `);
-  const res = await fetch(url);
+  const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (Orbis asset pipeline; +https://github.com/ValentynKoval/orbis)" } });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   await writeFile(file, Buffer.from(await res.arrayBuffer()));
   console.log("ok");
@@ -147,6 +147,8 @@ async function borders() {
 await mkdir(CACHE, { recursive: true });
 await mkdir(TEX, { recursive: true });
 await mkdir(DATA, { recursive: true });
+const earthOnly = !process.argv.includes("--bodies");
+if (earthOnly || process.argv.includes("--all")) {
 console.log("day textures");
 await dayTextures();
 console.log("night lights");
@@ -157,4 +159,23 @@ console.log("water mask");
 await waterMask();
 console.log("borders");
 await borders();
-console.log("done");
+}
+
+/** The Moon (NASA SVS, LRO) and the planets (Solar System Scope, CC BY 4.0). */
+async function bodies() {
+  const moon = await download("https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_poles_2k.tif", "moon-2k.tif");
+  await sharp(moon).jpeg({ quality: 84, mozjpeg: true }).toFile(path.join(TEX, "moon-2k.jpg"));
+  const SSS = "https://www.solarsystemscope.com/textures/download";
+  for (const name of ["sun", "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune"]) {
+    const file = name === "venus" ? "venus_atmosphere" : name;
+    const src = await download(`${SSS}/2k_${file}.jpg`, `sss-${name}.jpg`);
+    await sharp(src).resize(1024, 512).jpeg({ quality: 82, mozjpeg: true }).toFile(path.join(TEX, `${name}-1k.jpg`));
+  }
+  const ring = await download(`${SSS}/2k_saturn_ring_alpha.png`, "sss-saturn-ring.png");
+  await sharp(ring).resize(1024).png({ compressionLevel: 9 }).toFile(path.join(TEX, "saturn-ring-1k.png"));
+}
+
+if (process.argv.includes("--bodies") || process.argv.includes("--all")) {
+  console.log("moon and planets");
+  await bodies();
+}

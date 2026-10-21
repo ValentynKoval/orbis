@@ -4,6 +4,7 @@ export type AnalystAction =
   | { type: "fly_to"; lat: number; lon: number; zoom: "close" | "region" | "globe" }
   | { type: "select"; kind: "plane" | "ship" | "quake"; id: string }
   | { type: "select_satellite"; name: string }
+  | { type: "body"; id: string }
   | { type: "layers"; show: string[]; hide: string[] };
 
 export interface AnalystRequest {

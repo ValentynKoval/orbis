@@ -4,6 +4,33 @@
  * with the tone-mapping and colour-space chunks so it matches the renderer.
  */
 
+/**
+ * The renderer uses a logarithmic depth buffer (the camera ranges from a few
+ * hundred metres above the ground to beyond the Moon); every custom material
+ * needs three.js's chunks for it.
+ */
+export function logDepth(vertexShader: string, fragmentShader: string): { vertexShader: string; fragmentShader: string } {
+  const v = vertexShader.trimEnd();
+  const closing = v.lastIndexOf("}");
+  return {
+    vertexShader: "#include <common>\n#include <logdepthbuf_pars_vertex>\n" + v.slice(0, closing) + "  #include <logdepthbuf_vertex>\n" + v.slice(closing),
+    fragmentShader:
+      "#include <logdepthbuf_pars_fragment>\n" + fragmentShader.replace("void main() {", "void main() {\n    #include <logdepthbuf_fragment>"),
+  };
+}
+
+const NOISE = /* glsl */ `
+  float hash2(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+  float noise2(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x), mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+`;
+
 const SURFACE_BASIS = /* glsl */ `
   // Local east/north unit vectors on the sphere, in scene axes (see lib/geo.ts).
   void surfaceBasis(vec3 n, out vec3 east, out vec3 north, out float lat) {
@@ -85,6 +112,7 @@ export const earthFragment = /* glsl */ `
 `;
 
 export const cloudsFragment = /* glsl */ `
+  ${NOISE}
   uniform sampler2D uClouds;
   uniform vec3 uSun;
   uniform float uOpacity;
@@ -97,9 +125,14 @@ export const cloudsFragment = /* glsl */ `
     vec3 v = normalize(cameraPosition - vPosW);
     float ndl = dot(n, uSun);
     float mask = texture2D(uClouds, vUv).r;
+    // Break the mask's soft edges with value noise so clouds read as texture rather than blur.
+    float detail = noise2(vUv * vec2(1400.0, 700.0)) * 0.6 + noise2(vUv * vec2(3100.0, 1550.0)) * 0.4;
+    float edge = mask * (1.0 - mask) * 4.0;
+    mask = clamp(mask + (detail - 0.5) * 0.35 * edge, 0.0, 1.0);
     float density = pow(smoothstep(0.08, 1.0, mask), 1.6) * 0.82;
-    // Thin the deck as the camera descends so traffic and coastlines stay readable.
-    density *= mix(0.45, 1.0, smoothstep(1.35, 3.2, length(cameraPosition)));
+    // Thin the deck as the camera descends, and remove it once the camera is below cloud height.
+    float camDist = length(cameraPosition);
+    density *= smoothstep(1.012, 1.09, camDist) * mix(0.5, 1.0, smoothstep(1.3, 3.0, camDist));
     float twilight = smoothstep(-0.22, 0.0, ndl) * (1.0 - smoothstep(0.0, 0.3, ndl));
     vec3 color = vec3(1.0) * (max(ndl, 0.0) * 1.15 + 0.035);
     color += vec3(1.0, 0.45, 0.2) * twilight * 0.35;
@@ -418,6 +451,137 @@ export const moversFragment = (icon: "plane" | "ship") => /* glsl */ `
     float a = max(shape, halo);
     if (a < 0.02) discard;
     gl_FragColor = vec4(vColor, a * uOpacity);
+    #include <colorspace_fragment>
+  }
+`;
+
+/** Any textured body lit by the Sun: the Moon, the planets, the Earth seen from afar. */
+export const bodyVertex = /* glsl */ `
+  varying vec2 vUv;
+  varying vec3 vNormalW;
+  varying vec3 vPosW;
+  void main() {
+    vUv = uv;
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vPosW = world.xyz;
+    vNormalW = normalize(mat3(modelMatrix) * normal);
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+export const bodyFragment = /* glsl */ `
+  uniform sampler2D uMap;
+  uniform vec3 uSun;
+  uniform float uAmbient;
+  uniform float uEmissive;
+  uniform float uOpacity;
+  varying vec2 vUv;
+  varying vec3 vNormalW;
+  varying vec3 vPosW;
+  void main() {
+    vec3 n = normalize(vNormalW);
+    vec3 albedo = texture2D(uMap, vUv).rgb;
+    float ndl = max(dot(n, uSun), 0.0);
+    // A touch of terminator softening so the day/night line isn't a hard edge.
+    float lit = smoothstep(-0.02, 0.12, dot(n, uSun)) * ndl * 1.25 + uAmbient;
+    vec3 color = mix(albedo * lit, albedo * 1.35, uEmissive);
+    gl_FragColor = vec4(color, uOpacity);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+/** The Sun as a billboard: a hot disc with a soft corona, sized in world units. */
+export const sunVertex = /* glsl */ `
+  uniform float uSize;
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    vec4 center = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+    center.xy += position.xy * uSize;
+    gl_Position = projectionMatrix * center;
+  }
+`;
+
+export const sunFragment = /* glsl */ `
+  uniform float uClock;
+  uniform sampler2D uMap;
+  varying vec2 vUv;
+  void main() {
+    vec2 p = (vUv - 0.5) * 2.0;
+    float r = length(p);
+    // The photosphere fills the inner 18% of the billboard; the rest is corona.
+    float disc = 1.0 - smoothstep(0.17, 0.19, r);
+    float corona = exp(-r * 4.5) * 0.9 + exp(-r * 1.6) * 0.18;
+    float ang = atan(p.y, p.x);
+    float rays = 0.5 + 0.5 * sin(ang * 9.0 + uClock * 0.15) * sin(ang * 5.0 - uClock * 0.1);
+    corona *= 0.85 + 0.3 * rays;
+    // Granulation from the texture inside the disc; limb darkening toward its edge.
+    vec2 discUv = p / 0.19 * 0.5 + 0.5;
+    vec3 surface = texture2D(uMap, vec2(discUv.x * 0.5 + uClock * 0.002, discUv.y)).rgb;
+    float limbDark = 1.0 - 0.35 * smoothstep(0.1, 0.19, r);
+    vec3 color = (surface * 0.6 + 0.55) * vec3(1.0, 0.93, 0.8) * 3.6 * limbDark * disc + vec3(1.0, 0.72, 0.38) * corona * 1.5;
+    float a = max(disc, min(1.0, corona * 1.2));
+    gl_FragColor = vec4(color, a);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+/** Fixed-pixel markers with per-vertex colour, used for bodies too small to see at system scale. */
+export const markerVertex = /* glsl */ `
+  attribute vec3 aColor;
+  attribute float aSize;
+  uniform float uPixelRatio;
+  varying vec3 vColor;
+  void main() {
+    vColor = aColor;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = aSize * uPixelRatio;
+  }
+`;
+
+export const markerFragment = /* glsl */ `
+  uniform float uOpacity;
+  varying vec3 vColor;
+  void main() {
+    float d = length(gl_PointCoord - 0.5);
+    float a = smoothstep(0.5, 0.25, d);
+    if (a <= 0.0) discard;
+    gl_FragColor = vec4(vColor, a * uOpacity);
+    #include <colorspace_fragment>
+  }
+`;
+
+/** Aurora shell: NOAA probability (red channel, 1° grid starting at lon 0) → green curtains on the night side. */
+export const auroraFragment = /* glsl */ `
+  ${NOISE}
+  uniform sampler2D uMap;
+  uniform vec3 uSun;
+  uniform float uClock;
+  uniform float uOpacity;
+  varying vec2 vUv;
+  varying vec3 vNormalW;
+  varying vec3 vPosW;
+  void main() {
+    vec3 n = normalize(vNormalW);
+    float night = 1.0 - smoothstep(-0.18, 0.05, dot(n, uSun));
+    if (night <= 0.0) discard;
+    vec2 uv = vec2(fract(vUv.x - 0.5), vUv.y);
+    float p = texture2D(uMap, uv).r;
+    float band = smoothstep(0.06, 0.55, p);
+    if (band <= 0.001) discard;
+    // Curtains drift slowly along the oval; a second octave adds flicker.
+    float curtain = noise2(vec2(vUv.x * 520.0 + uClock * 0.03, vUv.y * 60.0)) * 0.7 + noise2(vec2(vUv.x * 1600.0 - uClock * 0.05, vUv.y * 160.0 + uClock * 0.02)) * 0.3;
+    curtain = 0.45 + 0.55 * curtain;
+    vec3 v = normalize(cameraPosition - vPosW);
+    float limb = 1.0 + pow(1.0 - max(dot(n, v), 0.0), 2.5) * 2.5;
+    vec3 green = vec3(0.35, 0.95, 0.5);
+    vec3 violet = vec3(0.75, 0.35, 1.0);
+    vec3 color = mix(green, violet, smoothstep(0.45, 1.0, p) * 0.55);
+    float a = band * night * curtain * limb * 0.55 * uOpacity;
+    gl_FragColor = vec4(color * a, a);
     #include <colorspace_fragment>
   }
 `;

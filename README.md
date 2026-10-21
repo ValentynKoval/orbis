@@ -15,10 +15,25 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
 | **Ships at Singapore** | **The ISS with its orbit** |
 | ![Ships around the Strait of Singapore](docs/media/singapore.jpg) | ![ISS selected, its orbit drawn in gold](docs/media/iss.jpg) |
 
+| **Streets of Kyiv (Sentinel-2, 10 m)** | **The Moon from 48 Earth radii** |
+| --- | --- |
+| ![Kyiv from 13 km up](docs/media/street.jpg) | ![The Moon beside the Earth](docs/media/moon.jpg) |
+| **Saturn** | **The inner solar system** |
+| ![Saturn with its rings](docs/media/saturn.jpg) | ![Planets, comets and asteroids around the Sun](docs/media/system.jpg) |
+
 <img src="docs/media/phone.jpg" alt="Orbis on a phone, Ukrainian interface" width="260">
 
 ## What it does
 
+- **Down to the streets.** Imagery streams in as you zoom: Sentinel-2 cloudless (10 m) from EOX for the whole planet
+  and, with an ArcGIS Location Platform key, Esri World Imagery down to individual houses. A Web Mercator quadtree
+  refines by screen-space error on top of the shaded globe, so lighting, clouds and city lights stay consistent.
+- **Out to the planets.** Zoom past the Moon and the scene hands over to a heliocentric view: the Sun, eight planets
+  at real size and real positions (JPL elements), the Moon, ~900 large asteroids and famous or currently active
+  comets from NASA/JPL, with orbits, labels, close-approach lists and a clock that runs at up to a month per second.
+- **Aurora.** NOAA's OVATION forecast drawn as curtains over the night side, with the live Kp index.
+- **The sky above me.** ISS passes for your place over the next two days (naked-eye visibility included) and what is
+  overhead right now: nearby aircraft and satellites high above the horizon.
 - **Satellites.** ~16,000 active objects from CelesTrak, propagated with SGP4 in a Web Worker and advanced along their
   orbits on the GPU between updates, so thousands of points move smoothly at 60 fps. Tap one for altitude, speed,
   inclination, period and its orbit drawn around the planet. The ISS is highlighted in gold.
@@ -45,7 +60,7 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
   day side uses the Blue Marble image for the current month, with sun glint on water and a scattering atmosphere.
 - **Landing tour.** A scroll-driven flight that picks its stops from live data: the strongest quake of the day, the
   busiest fire region, the most populated part of the night side.
-- **Shareable views.** `/live?at=lat,lon,distance` opens the globe looking at a place.
+- **Shareable views.** The share button copies a link with the camera, time and layers; `/live?at=lat,lon,distance&t=…&layers=…&space=mars`.
 - **Sound.** An optional generative ambient bed (Web Audio, no files) with a soft chime on selection.
 - **Adaptive quality.** The renderer lowers its pixel ratio when frames run long and restores it when there is headroom.
 - Ukrainian and English interface.
@@ -57,7 +72,8 @@ Tailwind CSS 4, Vitest. Hosted on Vercel; live traffic comes through a relay on 
 Object holding the AIS WebSocket and polling the aircraft feed); a GitHub Action mirrors CelesTrak data.
 
 ```
-src/engine/          renderer, camera rig, simulated clock, layers, shaders, SGP4 worker
+src/engine/          renderer, camera rig, simulated clock, layers (incl. imagery tiles, aurora, Moon), shaders, SGP4 worker
+src/engine/SolarSystem.ts  heliocentric scene with a floating origin
 src/app/api/*        feed routes: fetch upstream once, cache on the CDN, serve everyone
 src/lib/             astronomy, geometry, feed parsers, tour logic (unit-tested)
 src/i18n/            UA / EN dictionaries
@@ -75,6 +91,9 @@ one-download-per-update rule. Full credits are on the site's Sources page.
 | Data | Source | Licence |
 | --- | --- | --- |
 | Satellites | CelesTrak GP element sets | Free, attribution |
+| Imagery | EOX Sentinel-2 cloudless 2024; Esri World Imagery (optional key) | CC BY-NC-SA 4.0; Esri terms |
+| Solar system | NASA/JPL SBDB and CAD; planet maps by Solar System Scope | Free; CC BY 4.0 |
+| Aurora | NOAA SWPC OVATION, Kp | Public domain |
 | Aircraft | adsb.lol | ODbL 1.0 |
 | Ships | aisstream.io, Digitraffic (Fintraffic) | Free; CC BY 4.0 |
 | Earthquakes | USGS Earthquake Hazards Program | Public domain |

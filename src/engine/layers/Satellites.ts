@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { advanceOrbit, type Vec3 } from "@/lib/geo";
-import { satellitesFragment, satellitesVertex } from "../shaders";
+import { satellitesFragment, satellitesVertex, logDepth } from "../shaders";
 import type { SatLive, SatWorkerRequest, SatWorkerResponse } from "../types";
+import type { Pass } from "@/lib/passes";
 
 /** Colours per SatGroup, in enum order. Cool hues; gold is reserved for stations and selection. */
 const GROUP_COLORS = ["#f2c14e", "#8ccbff", "#a9b7ff", "#c6a6ff", "#7ee7e1", "#f3f6ff", "#9fb3c8"];
@@ -35,13 +36,13 @@ export class Satellites {
   private lastRequest = 0;
   private selected = -1;
   private details = new Map<string, (live: SatLive | null) => void>();
+  private passRequests = new Map<string, (passes: Pass[]) => void>();
 
   onLoaded: ((catalog: SatCatalog) => void) | null = null;
 
   constructor(pixelRatio: number) {
     this.material = new THREE.ShaderMaterial({
-      vertexShader: satellitesVertex,
-      fragmentShader: satellitesFragment,
+      ...logDepth(satellitesVertex, satellitesFragment),
       uniforms: {
         uDt: { value: 0 },
         uPixelRatio: { value: pixelRatio },
@@ -109,6 +110,12 @@ export class Satellites {
         cb?.(msg.ok ? { lat: msg.lat, lon: msg.lon, altKm: msg.altKm, speedKms: msg.speedKms } : null);
         break;
       }
+      case "passes": {
+        const cb = this.passRequests.get(msg.tag);
+        this.passRequests.delete(msg.tag);
+        cb?.(msg.passes);
+        break;
+      }
       case "orbit": {
         if (msg.index !== this.selected) break;
         this.orbit.geometry.setAttribute("position", new THREE.BufferAttribute(msg.points, 3));
@@ -160,6 +167,15 @@ export class Satellites {
     return new Promise((resolve) => {
       this.details.set(tag, resolve);
       this.post({ type: "detail", index, time: simMs, tag });
+    });
+  }
+
+  /** ISS passes over a place for the next `hours`, computed in the worker. */
+  issPasses(lat: number, lon: number, fromMs: number, hours = 48): Promise<Pass[]> {
+    return new Promise((resolve) => {
+      const tag = `passes-${Date.now()}-${Math.random()}`;
+      this.passRequests.set(tag, resolve);
+      this.post({ type: "passes", lat, lon, from: fromMs, hours, tag });
     });
   }
 
