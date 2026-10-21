@@ -36,6 +36,8 @@ interface OrbisState {
   setMode(mode: Mode): void;
   toggleLayer(key: LayerKey): void;
   select(selection: Selection | null): void;
+  sound: boolean;
+  toggleSound(): void;
   setPlaneFilter(filter: PlaneFilter): void;
   toggleShipKind(kind: number): void;
 }
@@ -55,6 +57,14 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   selectionDetail: null,
   planeFilter: "all",
   time: { live: true, rate: 1 },
+  sound: false,
+  toggleSound: () => {
+    const sound = !get().sound;
+    set({ sound });
+    const ambience = get().engine?.ambience;
+    if (sound) ambience?.start();
+    else ambience?.stop();
+  },
   shipKinds: Array.from({ length: SHIP_KINDS }, () => true),
   iss: null,
   quakes: [],

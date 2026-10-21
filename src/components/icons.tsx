@@ -85,3 +85,12 @@ export function Spark({ className }: IconProps) {
     </svg>
   );
 }
+
+/** Sound: a carrier wave; muted, a flat line. */
+export function Wave({ className, on }: IconProps & { on: boolean }) {
+  return (
+    <svg {...base} className={className}>
+      {on ? <path d="M2.5 12c1.6 0 1.6-5 3.2-5s1.6 10 3.2 10 1.6-13 3.1-13 1.6 16 3.2 16 1.6-10 3.2-10 1.5 7 3.1 7" /> : <path d="M2.5 12h19" />}
+    </svg>
+  );
+}

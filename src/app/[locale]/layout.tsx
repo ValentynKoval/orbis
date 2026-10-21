@@ -33,8 +33,14 @@ export async function generateMetadata({ params }: LayoutProps<"/[locale]">): Pr
     title: { default: t.meta.title, template: `%s · Orbis` },
     description: t.meta.description,
     alternates: { canonical: `/${locale}`, languages: { uk: "/uk", en: "/en" } },
-    openGraph: { title: t.meta.title, description: t.meta.description, type: "website", locale: locale === "uk" ? "uk_UA" : "en_GB" },
-    twitter: { card: "summary_large_image", title: t.meta.title, description: t.meta.description },
+    openGraph: {
+      title: t.meta.title,
+      description: t.meta.description,
+      type: "website",
+      locale: locale === "uk" ? "uk_UA" : "en_GB",
+      images: [{ url: "/og.jpg", width: 1200, height: 630 }],
+    },
+    twitter: { card: "summary_large_image", title: t.meta.title, description: t.meta.description, images: ["/og.jpg"] },
   };
 }
 

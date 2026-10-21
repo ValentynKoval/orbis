@@ -51,6 +51,9 @@ export default async function SourcesPage({ params }: PageProps<"/[locale]/sourc
 
       <p className="mt-10 max-w-[38rem] text-sm leading-relaxed text-haze">{t.sources.ai}</p>
       <p className="mt-4 max-w-[38rem] text-sm leading-relaxed text-dim">{t.sources.note}</p>
+      <Link href={`/${locale}/case`} className="mt-10 inline-block text-sm text-lunar underline decoration-hairline underline-offset-4 hover:decoration-foil">
+        {t.caseStudy.nav}
+      </Link>
     </main>
   );
 }

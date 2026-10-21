@@ -69,6 +69,8 @@ export const en = {
     closePanel: "Close layers",
     openPanel: "Show layers",
     resetView: "Reset view",
+    soundOn: "Turn ambient sound on",
+    soundOff: "Turn ambient sound off",
     clouds: "Clouds from {date}",
     cloudsArchive: "Clouds: NASA composite",
     hint: "Drag to rotate, scroll or pinch to zoom, tap an object to inspect it.",
@@ -113,6 +115,7 @@ export const en = {
     pause: "Pause",
     speed: "Playback speed",
     goLive: "Back to live",
+    replay: "Replay",
     now: "now",
     ago: "{h} h {m} min ago",
     noTraffic: "Aircraft and ships are recorded from {time} UTC.",
@@ -234,6 +237,57 @@ export const en = {
   },
   time: {
     justNow: "just now",
+  },
+  caseStudy: {
+    nav: "Case study",
+    title: "A live planet on a zero budget",
+    lead: "Orbis puts every tracked satellite, aircraft and ship, today's earthquakes and fires, and yesterday's real clouds on one Earth that moves in real time, with a 24-hour replay and an analyst you can talk to. It runs on free tiers only.",
+    figures: [
+      ["~16,000", "satellites propagated in the browser"],
+      ["~12,000", "aircraft, refreshed every 90 s"],
+      ["~22,000", "ships from a global AIS stream"],
+      ["24 h", "of traffic recorded for replay"],
+      ["$0", "per month to run"],
+    ],
+    sections: [
+      {
+        title: "The brief",
+        body: "Build something unlike a usual portfolio site: a mission-control view of the planet, beautiful enough to stop a visitor and honest enough that every dot is real data. Tens of thousands of moving objects at 60 frames per second, comfortable on a phone, in Ukrainian and English, with nothing to pay.",
+      },
+      {
+        title: "How the data flows",
+        body: "Visitors never call a data provider. Feed routes on Vercel fetch each source once and the CDN serves everyone from cache. A single Cloudflare Durable Object holds the global AIS WebSocket, polls the aircraft feed and Digitraffic, keeps tracks, and writes a 5-minute frame of all traffic into its own SQLite storage for the replay. Satellite element sets reach the site through a GitHub Action mirror, because CelesTrak allows one download per update.",
+      },
+      {
+        title: "Drawing the planet",
+        body: "Hand-written GLSL: the terminator comes from a solar ephemeris, the night side from NASA Black Marble, oceans get sun glint, clouds cast shadows, and the atmosphere is lit by where each view ray grazes the Earth. Satellites are propagated with SGP4 in a Web Worker and rotated along their orbits on the GPU between updates; aircraft and ships fly great circles in the vertex shader and blend from where they were drawn whenever new data arrives, so nothing ever jumps.",
+      },
+      {
+        title: "Time and the analyst",
+        body: "Everything reads one simulated clock, so the timeline can move the Sun, re-propagate every satellite, fade quakes and fires, and swap in recorded traffic frames. The analyst runs a tool-calling loop on Gemini: it queries live aircraft, ships, quakes, fires and satellite positions on the server, answers in the visitor's language, and returns camera moves the browser performs.",
+      },
+    ],
+    problemsTitle: "Problems solved on the way",
+    problems: [
+      ["OpenSky does not answer cloud networks", "Neither Cloudflare nor Vercel could reach it, so aircraft come from the adsb.lol community network (ODbL), which also adds registrations and aircraft types."],
+      ["CelesTrak allows one download per update", "A scheduled GitHub Action is the only client; it keeps a copy on an orphan branch that the site serves through the CDN."],
+      ["workers.dev is blocked by some Ukrainian ISPs", "Browsers only talk to Vercel; the relay sits behind a server route with a shared secret."],
+      ["Free bandwidth is counted before compression", "Relay responses are gzipped inside the function and cached for one relay cycle, keeping origin transfer inside the free allowance."],
+      ["The build hung on a WebAssembly re-export", "The SGP4 worker imports only the plain-JS modules of satellite.js, bypassing the package entry."],
+      ["One always-on object, and only one", "An outbound WebSocket keeps the Durable Object awake around the clock: about 10,800 of the 13,000 free GB-seconds a day."],
+    ],
+    stackTitle: "Stack",
+    stack: [
+      "Next.js 16, TypeScript",
+      "three.js with custom GLSL",
+      "satellite.js (SGP4)",
+      "GSAP, Zustand, Tailwind CSS 4",
+      "Cloudflare Workers and Durable Objects",
+      "Gemini API",
+      "Vitest, Playwright",
+      "Vercel, GitHub Actions",
+    ],
+    open: "Open the live globe",
   },
 };
 

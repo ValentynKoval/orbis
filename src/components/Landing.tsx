@@ -295,6 +295,9 @@ export function Landing() {
           <Link href={`/${locale}/sources`} className="text-haze underline decoration-hairline underline-offset-4 hover:text-lunar">
             {t.nav.sources}
           </Link>
+          <Link href={`/${locale}/case`} className="text-haze underline decoration-hairline underline-offset-4 hover:text-lunar">
+            {t.caseStudy.nav}
+          </Link>
         </footer>
       </section>
     </div>

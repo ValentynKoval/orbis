@@ -54,7 +54,8 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
 
 ## Definition of done (every round)
 
-`npm run lint` → `npm run typecheck` → `npm run test` → `npm run build` → commit → push → `vercel deploy --prod` → link + short report.
+`npm run lint` → `npm run typecheck` → `npm run test` → `npm run build` → `npm run test:e2e` (Playwright, desktop + phone,
+against the build, real feeds) → commit → push → `vercel deploy --prod` → link + short report.
 On this PC `next build` may need `NODE_OPTIONS=--max-old-space-size=4096`. Stop the dev server before building.
 
 ## Architecture

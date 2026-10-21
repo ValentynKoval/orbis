@@ -9,6 +9,7 @@ import { SatGroup } from "@/lib/feeds/satellites";
 import { setFeed, useOrbis, type PlaneFilter } from "@/store/orbis";
 import { CameraRig } from "./CameraRig";
 import { SimClock } from "./SimClock";
+import { Ambience } from "./Ambience";
 import { Fires } from "./layers/Fires";
 import { Planet } from "./layers/Planet";
 import { Quakes } from "./layers/Quakes";
@@ -44,6 +45,11 @@ export class Engine {
   private quakes = new Quakes();
   private fires: Fires;
   readonly traffic = new Traffic();
+  readonly ambience = new Ambience();
+  /** Adaptive resolution: drops the pixel ratio when frames run long, restores it when there is headroom. */
+  private maxPixelRatio = 1;
+  private frameTimes: number[] = [];
+  private lastQualityCheck = 0;
   private reticle: THREE.Points;
   private reticleMaterial: THREE.ShaderMaterial;
   private observer: ResizeObserver;
@@ -73,6 +79,7 @@ export class Engine {
     this.renderer.toneMappingExposure = 1.05;
     const pixelRatio = Math.min(window.devicePixelRatio || 1, options.lite ? 1.75 : 2);
     this.renderer.setPixelRatio(pixelRatio);
+    this.maxPixelRatio = pixelRatio;
     this.textureSize = !options.lite && this.renderer.capabilities.maxTextureSize >= 4096 ? "4k" : "2k";
     this.coarse = window.matchMedia("(pointer: coarse)").matches;
 
@@ -186,6 +193,7 @@ export class Engine {
     this.quakes.dispose();
     this.fires.dispose();
     this.traffic.dispose();
+    this.ambience.dispose();
     this.reticleMaterial.dispose();
     this.reticle.geometry.dispose();
     this.renderer.dispose();
@@ -215,6 +223,7 @@ export class Engine {
     if (selection?.kind === "plane" || selection?.kind === "ship") this.loadTrack(selection);
     this.reticle.visible = !!selection;
     this.lastDetail = 0;
+    if (selection) this.ambience.ping();
   }
 
   private loadTrack(selection: Extract<Selection, { kind: "plane" | "ship" }>) {
@@ -370,7 +379,25 @@ export class Engine {
     this.updateLiveDetails(sim, now);
 
     this.renderer.render(this.scene, this.camera);
+    this.adaptQuality(now, dt);
   };
+
+  private adaptQuality(now: number, dt: number) {
+    this.frameTimes.push(dt);
+    if (now - this.lastQualityCheck < 2500) return;
+    this.lastQualityCheck = now;
+    const times = this.frameTimes.splice(0).sort((a, b) => a - b);
+    if (times.length < 30) return;
+    const median = times[times.length >> 1];
+    const ratio = this.renderer.getPixelRatio();
+    if (median > 1 / 45 && ratio > 1) this.setPixelRatio(Math.max(1, ratio - 0.25));
+    else if (median < 1 / 58 && ratio < this.maxPixelRatio) this.setPixelRatio(Math.min(this.maxPixelRatio, ratio + 0.25));
+  }
+
+  private setPixelRatio(ratio: number) {
+    this.renderer.setPixelRatio(ratio);
+    this.renderer.setSize(this.width, this.height, false);
+  }
 
   private animateOpacity(dt: number) {
     const k = 1 - Math.exp(-dt * 5);

@@ -48,3 +48,7 @@ next-env.d.ts
 /relay/node_modules/
 /relay/.wrangler/
 /relay/.dev.vars
+
+# playwright
+/test-results/
+/playwright-report/

@@ -9,6 +9,7 @@ import { useNow } from "./hooks";
 
 const SPAN_MS = 24 * 3600_000;
 const RATES = [1, 60, 600] as const;
+const REPLAY_FROM_MS = 3 * 3600_000;
 
 function offsetLabel(ms: number, t: ReturnType<typeof useDict>) {
   const min = Math.round(ms / 60_000);
@@ -47,7 +48,9 @@ export function Timeline() {
   const setRate = (rate: number) => {
     lastRate.current = rate;
     if (!engine) return;
-    engine.setTime(time.live ? sim - 60_000 : sim, rate);
+    // From live, a faster speed means "replay the recent past": start three hours back.
+    const from = time.live ? (rate === 1 ? sim - 60_000 : Math.max(start, sim - REPLAY_FROM_MS)) : sim;
+    engine.setTime(from, rate);
   };
 
   const recorded = historyStart !== null ? Math.max(0, (historyStart - start) / SPAN_MS) : 1;

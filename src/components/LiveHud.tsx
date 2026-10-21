@@ -37,7 +37,10 @@ export function LiveHud() {
     engine.setFocus(null);
     engine.rig.setAutoRotate(0);
     engine.rig.setOffset(0, 0);
-    engine.rig.flyTo({ dist: Math.min(Math.max(engine.rig.goal.dist, 3.4), 5.2) }, 1.4);
+    // Shareable views: /live?at=lat,lon,distance (distance in Earth radii from the centre).
+    const at = new URLSearchParams(window.location.search).get("at")?.split(",").map(Number);
+    if (at && at.length >= 2 && at.every(Number.isFinite)) engine.rig.flyTo({ lat: at[0], lon: at[1], dist: at[2] || 2.4 }, 2);
+    else engine.rig.flyTo({ dist: Math.min(Math.max(engine.rig.goal.dist, 3.4), 5.2) }, 1.4);
     return () => engine.setInteractive(false);
   }, [engine]);
 

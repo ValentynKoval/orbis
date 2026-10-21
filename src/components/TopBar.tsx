@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import { LOCALE_COOKIE, type Locale } from "@/i18n/config";
 import { useDict, useLocale } from "@/i18n/client";
 import { formatUtc } from "@/lib/format";
-import { OrbisMark } from "./icons";
+import { OrbisMark, Wave } from "./icons";
+import { useOrbis } from "@/store/orbis";
 import { useNow } from "./hooks";
 
 function switchPath(pathname: string, to: Locale) {
@@ -21,6 +22,11 @@ export function TopBar({ live = false }: { live?: boolean }) {
   const pathname = usePathname();
   const other: Locale = locale === "uk" ? "en" : "uk";
   const now = useNow(1000);
+  const sound = useOrbis((s) => s.sound);
+  const toggleSound = useOrbis((s) => s.toggleSound);
+  const isLive = useOrbis((s) => s.time.live);
+  const engine = useOrbis((s) => s.engine);
+  const shown = isLive ? now : (engine?.clock.now() ?? now);
 
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-20 flex justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))]">
@@ -33,15 +39,25 @@ export function TopBar({ live = false }: { live?: boolean }) {
           {live && (
             <span className="readout hidden items-center gap-2 border-l border-hairline px-3 text-xs text-haze sm:flex">
               <span className="relative flex size-1.5">
-                <span className="absolute inline-flex size-full animate-ping rounded-full bg-seismic/70" />
-                <span className="relative inline-flex size-1.5 rounded-full bg-seismic" />
+                {isLive && <span className="absolute inline-flex size-full animate-ping rounded-full bg-seismic/70" />}
+                <span className={`relative inline-flex size-1.5 rounded-full ${isLive ? "bg-seismic" : "bg-foil"}`} />
               </span>
-              <span className="text-lunar">{t.hud.live}</span>
+              <span className="text-lunar">{isLive ? t.hud.live : t.timeline.replay}</span>
               <span suppressHydrationWarning>
-                {formatUtc(now, locale, false)} {t.hud.utc}
+                {formatUtc(shown, locale, isLive ? false : true)} {t.hud.utc}
               </span>
             </span>
           )}
+          <button
+            type="button"
+            onClick={toggleSound}
+            aria-pressed={sound}
+            aria-label={sound ? t.hud.soundOff : t.hud.soundOn}
+            title={sound ? t.hud.soundOff : t.hud.soundOn}
+            className={`rounded-full px-2.5 py-1.5 transition-colors duration-300 ease-[var(--ease-orbit)] ${sound ? "text-foil" : "text-haze hover:text-lunar"}`}
+          >
+            <Wave on={sound} className="size-4" />
+          </button>
           <Link
             href={`/${locale}/sources`}
             className="rounded-full px-3 py-1.5 text-xs text-haze transition-colors duration-300 ease-[var(--ease-orbit)] hover:text-lunar"

@@ -3,7 +3,19 @@
 **The planet, live.** A real-time 3D Earth in the browser: every tracked satellite and the ISS, today's earthquakes and
 wildfires, yesterday's real clouds and tonight's city lights, on a globe lit by the actual position of the Sun.
 
-Live: https://orbis-live.vercel.app
+Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app/en/case
+
+![Orbis landing: the night side of the Earth with city lights and the title “The planet, live.”](docs/media/landing.jpg)
+
+[Watch a 25-second flight through the landing tour (WebM)](docs/media/orbis.webm)
+
+| Aircraft over Europe | Satellites and the geostationary ring |
+| --- | --- |
+| ![Thousands of aircraft icons over Europe](docs/media/europe.jpg) | ![The globe from afar with the satellite shell](docs/media/orbit.jpg) |
+| **Ships at Singapore** | **The ISS with its orbit** |
+| ![Ships around the Strait of Singapore](docs/media/singapore.jpg) | ![ISS selected, its orbit drawn in gold](docs/media/iss.jpg) |
+
+<img src="docs/media/phone.jpg" alt="Orbis on a phone, Ukrainian interface" width="260">
 
 ## What it does
 
@@ -33,6 +45,9 @@ Live: https://orbis-live.vercel.app
   day side uses the Blue Marble image for the current month, with sun glint on water and a scattering atmosphere.
 - **Landing tour.** A scroll-driven flight that picks its stops from live data: the strongest quake of the day, the
   busiest fire region, the most populated part of the night side.
+- **Shareable views.** `/live?at=lat,lon,distance` opens the globe looking at a place.
+- **Sound.** An optional generative ambient bed (Web Audio, no files) with a soft chime on selection.
+- **Adaptive quality.** The renderer lowers its pixel ratio when frames run long and restores it when there is headroom.
 - Ukrainian and English interface.
 
 ## Stack
@@ -75,11 +90,13 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs lint, type checks, unit tests and a production build. `npm run assets` regenerates the textures.
+`npm run check` runs lint, type checks, unit tests and a production build; `npm run test:e2e` then runs the Playwright
+suite (desktop and phone) against that build. `npm run assets` regenerates the textures and
+`node scripts/capture.mjs <url>` re-shoots the screenshots, the Open Graph image and the video.
 
 ## Roadmap
 
 1. Globe, landing, satellites, quakes, fires, clouds, city lights. *(done)*
 2. Live aircraft and ships through a relay, smooth motion for tens of thousands of objects, search, tracks. *(done)*
 3. 24-hour history with a replay timeline, an AI analyst that answers questions and moves the camera. *(done)*
-4. Mobile polish, sound, end-to-end tests, case study.
+4. Mobile polish, sound, end-to-end tests, case study. *(done)*
