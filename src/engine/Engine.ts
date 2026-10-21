@@ -19,8 +19,8 @@ import type { FeedKey, LayerKey, Selection } from "./types";
 
 const REFRESH_MS: Record<FeedKey, number> = {
   satellites: 2 * 3600_000,
-  planes: 30_000,
-  ships: 45_000,
+  planes: 45_000,
+  ships: 60_000,
   quakes: 60_000,
   fires: 30 * 60_000,
   clouds: 6 * 3600_000,
