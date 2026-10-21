@@ -4,6 +4,9 @@
 import { chromium, devices } from "@playwright/test";
 import { mkdir, rename, readdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { gmst } from "../src/lib/astro.ts";
+import { rotateY, vecToLatLon } from "../src/lib/geo.ts";
+import { moonPhase, moonPosition, planetPosition, toScene } from "../src/lib/orbits.ts";
 
 const base = process.argv[2] ?? "http://localhost:3300";
 const out = path.resolve(import.meta.dirname, "..", "docs", "media");
@@ -38,10 +41,27 @@ for (const [name, at] of [
   await page.close();
 }
 
+// Camera angles from the ephemerides: the Moon just past the Moon looking back at the Earth,
+// Saturn from its sunlit side.
+const now = Date.now();
+// Camera on the far side of the Moon: at new moon that side, and the Earth behind it, are fully lit.
+let newMoon = now;
+let darkest = 1;
+for (let t = now - 40 * 86_400_000; t < now; t += 3_600_000) {
+  const ill = moonPhase(t).illuminated;
+  if (ill < darkest) {
+    darkest = ill;
+    newMoon = t;
+  }
+}
+const moonFixed = rotateY(toScene(moonPosition(newMoon)), -gmst(newMoon));
+const moonLL = vecToLatLon(moonFixed);
+const saturn = toScene(planetPosition("saturn", now));
+const sunward = vecToLatLon([-saturn[0], -saturn[1], -saturn[2]]);
 for (const [name, query] of [
   ["street", "at=40.7128,-74.0060,1.0022"],
-  ["moon", "at=12,-70,48"],
-  ["saturn", "space=saturn&at=18,40,0.0036"],
+  ["moon", `at=${(moonLL.lat + 0.8).toFixed(2)},${(moonLL.lon + 0.9).toFixed(2)},69.5&t=${newMoon}`],
+  ["saturn", `space=saturn&at=${(sunward.lat + 18).toFixed(2)},${(sunward.lon + 30).toFixed(2)},0.0036`],
   ["system", "space=earth&at=35,120,3.2"],
 ]) {
   page = await desktop.newPage();
