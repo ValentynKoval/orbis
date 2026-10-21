@@ -1,0 +1,46 @@
+name: Mirror CelesTrak element sets
+
+# CelesTrak publishes new GP data every 2 hours and permits one download per
+# update. This job is the only client that talks to it; the site reads the copy
+# kept on the orphan `data` branch.
+on:
+  schedule:
+    - cron: "23 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-celestrak
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download active satellites
+        id: fetch
+        run: |
+          mkdir -p out/celestrak
+          code=$(curl -sS -A "Orbis/1.0 (+https://github.com/${{ github.repository }})" \
+            -o out/celestrak/active.tle -w '%{http_code}' \
+            'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle')
+          echo "HTTP $code"
+          if [ "$code" != "200" ] || ! grep -q '^1 ' out/celestrak/active.tle; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "$(grep -c '^1 ' out/celestrak/active.tle) element sets"
+
+      - name: Publish to the data branch
+        if: steps.fetch.outputs.changed == 'true'
+        run: |
+          cd out
+          git init -q -b data
+          git config user.name "orbis-data-bot"
+          git config user.email "orbis-data-bot@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Mirror CelesTrak active set $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data
