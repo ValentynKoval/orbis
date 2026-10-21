@@ -64,7 +64,7 @@ export function Search() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="bezel pointer-events-auto absolute top-[max(1rem,env(safe-area-inset-top))] right-4 rounded-full p-1"
+        className="bezel pointer-events-auto rounded-full p-1"
         aria-label={t.search.open}
       >
         <span className="bezel-core flex items-center gap-2 rounded-full px-3.5 py-2.5 text-sm text-haze">

@@ -15,6 +15,9 @@ const ROUTES: [RegExp, number][] = [
   [/^ships$/, 90],
   [/^ships\/names$/, 900],
   [/^ships\/\d{6,9}$/, 60],
+  [/^history$/, 60],
+  // Past frames never change.
+  [/^history\/(planes|ships)\/\d+$/, 86_400],
 ];
 
 export const maxDuration = 20;

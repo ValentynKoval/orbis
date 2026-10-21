@@ -59,7 +59,7 @@ export const en = {
     },
     final: {
       title: "Take the controls",
-      body: "Spin the Earth, zoom into a coastline, tap any satellite, quake or fire to see what it is. No account, no ads.",
+      body: "Spin the Earth, tap any satellite, flight, ship or quake, rewind the last 24 hours, or ask the analyst what is happening where. No account, no ads.",
     },
   },
   hud: {
@@ -92,6 +92,30 @@ export const en = {
     all: "All",
     airborne: "Airborne",
     high: "Above 9 km",
+  },
+  analyst: {
+    open: "Ask Orbis",
+    title: "Ask Orbis",
+    close: "Close",
+    disclosure: "Answers come from Google Gemini (free tier), which may use questions to improve its models. Don't include personal details.",
+    placeholder: "Ask about what's on the globe right now",
+    send: "Ask",
+    thinking: "Looking at the live data…",
+    left: "{n} left today",
+    quota: "That's all the questions for today. Come back tomorrow.",
+    failed: "The analyst couldn't answer just now. Try again in a minute.",
+    empty: "No answer this time. Try asking it differently.",
+    suggestions: ["Which plane is highest over Europe right now?", "Where is the ISS?", "Strongest earthquake today?", "How many tankers are near Singapore?"],
+  },
+  timeline: {
+    label: "Timeline, last 24 hours",
+    play: "Play",
+    pause: "Pause",
+    speed: "Playback speed",
+    goLive: "Back to live",
+    now: "now",
+    ago: "{h} h {m} min ago",
+    noTraffic: "Aircraft and ships are recorded from {time} UTC.",
   },
   search: {
     open: "Search",
@@ -205,6 +229,7 @@ export const en = {
         url: "https://www.naturalearthdata.com",
       },
     ],
+    ai: "The analyst is powered by the Google Gemini API (free tier); questions are sent to Google and may be used to improve its models.",
     note: "Data can be delayed or incomplete. Do not use Orbis for navigation, safety or emergency decisions.",
   },
   time: {

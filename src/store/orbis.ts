@@ -24,6 +24,8 @@ interface OrbisState {
   /** Extra facts fetched for the selected ship (name, destination, size). */
   selectionDetail: ShipDetail | null;
   planeFilter: PlaneFilter;
+  /** Timeline state; the clock itself lives in the engine. */
+  time: { live: boolean; rate: number };
   shipKinds: boolean[];
   iss: SatLive | null;
   quakes: Quake[];
@@ -52,6 +54,7 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   selectionLive: null,
   selectionDetail: null,
   planeFilter: "all",
+  time: { live: true, rate: 1 },
   shipKinds: Array.from({ length: SHIP_KINDS }, () => true),
   iss: null,
   quakes: [],

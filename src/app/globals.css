@@ -96,3 +96,41 @@
     filter: none;
   }
 }
+
+/* Timeline scrubber: invisible native track over our own bar, a gold playhead. */
+.timeline-range {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+}
+.timeline-range::-webkit-slider-runnable-track {
+  height: 100%;
+  background: transparent;
+}
+.timeline-range::-moz-range-track {
+  background: transparent;
+}
+.timeline-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 4px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 2px;
+  background: var(--color-foil);
+  box-shadow: 0 0 12px rgb(242 193 78 / 0.6);
+}
+.timeline-range::-moz-range-thumb {
+  width: 4px;
+  height: 22px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--color-foil);
+  box-shadow: 0 0 12px rgb(242 193 78 / 0.6);
+}
+.timeline-range:focus-visible {
+  outline: 2px solid var(--color-foil);
+  outline-offset: 4px;
+  border-radius: 6px;
+}

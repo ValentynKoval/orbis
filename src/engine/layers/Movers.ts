@@ -91,9 +91,9 @@ export class Movers {
   }
 
   /** Replaces the data set, blending objects that already existed from where they were drawn. */
-  set(ids: (string | number)[], items: MoverInput[], nowS: number) {
+  set(ids: (string | number)[], items: MoverInput[], nowS: number, blend = true) {
     const from = new Float32Array(items.length * 3);
-    if (this.items.length) {
+    if (blend && this.items.length) {
       for (let i = 0; i < ids.length; i++) {
         const prev = this.index.get(ids[i]);
         if (prev === undefined) continue;
@@ -164,6 +164,11 @@ export class Movers {
   /** Hide objects below this display altitude (Earth radii). Negative shows everything. */
   setMinAlt(alt: number) {
     this.material.uniforms.uMinAlt.value = alt;
+  }
+
+  setMaxExtrapolation(seconds: number) {
+    this.options.maxExtrapolation = seconds;
+    this.material.uniforms.uMaxDt.value = seconds;
   }
 
   select(i: number) {

@@ -31,7 +31,19 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
   Secrets on the worker: `RELAY_TOKEN`, `AISSTREAM_API_KEY` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
 - OpenSky is not used: it does not answer requests from Cloudflare or Vercel (AWS) networks. Aircraft come from
   adsb.lol (ODbL), which must stay credited on the Sources page.
+- History: the hub writes one gzipped frame per kind every 5 min (planes: motion columns only; ships: full snapshot)
+  into its SQLite table `frames`, keeps 25 h. `/history` lists frames, `/history/{planes|ships}/{t}` serves the gzip as-is.
+- AI analyst quota lives in the hub (`/quota/{visitorHash}`): 15 questions per visitor and 300 in total per UTC day.
 - Deploy: `cd relay && XDG_CONFIG_HOME=... npx wrangler deploy`. A deploy restarts the object; ships repopulate in minutes.
+
+## AI analyst
+
+- `/api/analyst` (POST) runs an agent loop on Gemini (`GEMINI_API_KEY`, `GEMINI_MODEL` in Vercel env; free tier only,
+  Claude API is not used because it is paid). Data tools run on the server (`lib/analyst/tools.ts`, unit-tested);
+  UI tools come back as `actions` that `components/Analyst.tsx` performs. Keep the Google disclosure in the panel
+  and on the Sources page.
+- When testing with curl on this PC, send non-ASCII questions from a UTF-8 file (`--data-binary @q.json`):
+  Git Bash mangles Cyrillic in `-d`.
 
 ## Languages
 

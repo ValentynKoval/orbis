@@ -69,11 +69,81 @@ export class Traffic {
   }
 
   /** Returns the number of aircraft, or null if the snapshot hasn't changed. */
-  async loadPlanes(nowS: number): Promise<number | null> {
+  async loadPlanes(nowS: number, force = false): Promise<number | null> {
     const res = await fetch("/api/live/planes");
     if (!res.ok) throw new Error(`planes ${res.status}`);
     const snap: PlaneSnapshot = await res.json();
-    if (this.planeSnap && snap.t === this.planeSnap.t) return null;
+    if (this.replay || (!force && this.planeSnap && snap.t === this.planeSnap.t)) return null;
+    this.applyPlanes(snap, nowS, true);
+    return snap.ids.length;
+  }
+
+  async loadShips(nowS: number, force = false): Promise<number | null> {
+    const res = await fetch("/api/live/ships");
+    if (!res.ok) throw new Error(`ships ${res.status}`);
+    const snap: ShipSnapshot = await res.json();
+    if (this.replay || (!force && this.shipSnap && snap.t === this.shipSnap.t)) return null;
+    this.applyShips(snap, nowS, true);
+    return snap.ids.length;
+  }
+
+  // ------------------------------------------------------------- replay
+
+  /** True while the timeline is away from "now": live polling pauses and history frames drive both layers. */
+  replay = false;
+  private frames: Record<"planes" | "ships", number[]> = { planes: [], ships: [] };
+  private frameShown: Record<"planes" | "ships", number> = { planes: 0, ships: 0 };
+  private frameLoading: Record<"planes" | "ships", boolean> = { planes: false, ships: false };
+
+  /** Unix seconds of the oldest recorded traffic frame, or null before the index loads. */
+  get historyStart(): number | null {
+    const first = [this.frames.planes[0], this.frames.ships[0]].filter((t) => t !== undefined);
+    return first.length ? Math.min(...first) : null;
+  }
+
+  async loadHistoryIndex() {
+    const res = await fetch("/api/live/history");
+    if (res.ok) this.frames = await res.json();
+  }
+
+  setReplay(on: boolean) {
+    if (on === this.replay) return;
+    this.replay = on;
+    this.frameShown = { planes: 0, ships: 0 };
+    // Frames are five minutes apart, so let objects coast a little longer between them.
+    this.planes.setMaxExtrapolation(on ? 330 : 240);
+    this.clearTrack();
+  }
+
+  /** Keeps the frame at or before `simS` on screen for each kind. */
+  syncReplay(simS: number) {
+    for (const kind of ["planes", "ships"] as const) {
+      const t = frameAtOrBefore(this.frames[kind], simS);
+      if (t === this.frameShown[kind] || this.frameLoading[kind]) continue;
+      const layer = kind === "planes" ? this.planes : this.ships;
+      if (t === null) {
+        layer.set([], [], simS);
+        this.frameShown[kind] = 0;
+        continue;
+      }
+      this.frameLoading[kind] = true;
+      const blend = Math.abs(t - this.frameShown[kind]) <= 600;
+      fetch(`/api/live/history/${kind}/${t}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((frame) => {
+          if (!frame || !this.replay) return;
+          if (kind === "planes") this.applyPlanes(fillPlaneFrame(frame), simS, blend);
+          else this.applyShips(frame, simS, blend);
+          this.frameShown[kind] = t;
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          this.frameLoading[kind] = false;
+        });
+    }
+  }
+
+  private applyPlanes(snap: PlaneSnapshot, nowS: number, blend: boolean) {
     const t = snap.t / 1000;
     const items: MoverInput[] = snap.ids.map((_, i) => ({
       lat: (snap.lat[i] / COORD_SCALE) * DEG,
@@ -84,16 +154,11 @@ export class Traffic {
       alt: planeAltitude(snap.alt[i], !!snap.gnd[i]),
       kind: snap.emg[i] ? PlaneKind.Emergency : snap.gnd[i] ? PlaneKind.Ground : PlaneKind.Airborne,
     }));
-    this.planes.set(snap.ids, items, nowS);
+    this.planes.set(snap.ids, items, nowS, blend);
     this.planeSnap = snap;
-    return snap.ids.length;
   }
 
-  async loadShips(nowS: number): Promise<number | null> {
-    const res = await fetch("/api/live/ships");
-    if (!res.ok) throw new Error(`ships ${res.status}`);
-    const snap: ShipSnapshot = await res.json();
-    if (this.shipSnap && snap.t === this.shipSnap.t) return null;
+  private applyShips(snap: ShipSnapshot, nowS: number, blend: boolean) {
     const t = snap.t / 1000;
     const items: MoverInput[] = snap.ids.map((_, i) => {
       const kn = snap.sog[i] / 10;
@@ -108,9 +173,8 @@ export class Traffic {
         kind: Math.min(snap.kind[i], SHIP_KINDS - 1),
       };
     });
-    this.ships.set(snap.ids, items, nowS);
+    this.ships.set(snap.ids, items, nowS, blend);
     this.shipSnap = snap;
-    return snap.ids.length;
   }
 
   /** Names for search, fetched once on demand. */
@@ -203,4 +267,41 @@ export class Traffic {
     this.track.geometry.dispose();
     (this.track.material as THREE.Material).dispose();
   }
+}
+
+/** Largest value in a sorted list that is ≤ t, or null. */
+export function frameAtOrBefore(sorted: number[], t: number): number | null {
+  let lo = 0;
+  let hi = sorted.length - 1;
+  let found: number | null = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid] <= t) {
+      found = sorted[mid];
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return found;
+}
+
+/** History frames carry motion only; give the identity columns empty values. */
+function fillPlaneFrame(frame: Partial<PlaneSnapshot> & Pick<PlaneSnapshot, "t" | "ids">): PlaneSnapshot {
+  const blank = frame.ids.map(() => "");
+  return {
+    callsign: blank,
+    reg: blank,
+    type: blank,
+    vr: frame.ids.map(() => 0),
+    cat: blank,
+    squawk: blank,
+    lat: [],
+    lon: [],
+    alt: [],
+    spd: [],
+    trk: [],
+    gnd: [],
+    age: [],
+    emg: [],
+    ...frame,
+  };
 }

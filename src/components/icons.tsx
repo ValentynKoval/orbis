@@ -76,3 +76,12 @@ export function Magnifier({ className }: IconProps) {
     </svg>
   );
 }
+
+/** The analyst: a four-point star, like a glint on a lens. */
+export function Spark({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M12 3.5c.6 4.6 3.9 7.9 8.5 8.5-4.6.6-7.9 3.9-8.5 8.5-.6-4.6-3.9-7.9-8.5-8.5 4.6-.6 7.9-3.9 8.5-8.5Z" />
+    </svg>
+  );
+}

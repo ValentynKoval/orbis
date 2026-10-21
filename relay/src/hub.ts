@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { ADSB_ALL_URL, buildPlaneSnapshot, type AdsbAircraft } from "../../src/lib/feeds/adsb";
 import type { PlaneSnapshot, PlaneTrack } from "../../src/lib/feeds/live";
+import { FRAME_EVERY_S, History, planeFrame, shipFrame, type FrameKind } from "./history";
 import { parseAisMessage, ShipStore } from "./ships";
 
 export interface Env {
@@ -12,6 +13,8 @@ export interface Env {
 /** One aircraft list every 90 s: fresh enough with client-side extrapolation, gentle on adsb.lol. */
 const POLL_MS = 90_000;
 const DIGITRAFFIC_META_MS = 30 * 60_000;
+const QUOTA_PER_VISITOR = 15;
+const QUOTA_TOTAL = 300;
 const PLANE_TRACK_POINTS = 48;
 const PLANE_STALE_S = 20 * 60;
 const AIS_URL = "https://stream.aisstream.io/v0/stream";
@@ -32,10 +35,12 @@ export class Hub extends DurableObject<Env> {
   private shipsJson = "";
   private shipsJsonAt = 0;
   private lastMeta = 0;
-  private stats = { aisMessages: 0, aisConnects: 0, planeErrors: 0, planeError: "", lastPoll: 0 };
+  private history: History;
+  private stats = { startedAt: Date.now(), aisMessages: 0, aisConnects: 0, aisCloses: 0, planeErrors: 0, planeError: "", lastPoll: 0 };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.history = new History(ctx.storage.sql);
     ctx.blockConcurrencyWhile(async () => {
       if ((await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now() + 1000);
     });
@@ -71,6 +76,18 @@ export class Hub extends DurableObject<Env> {
       const detail = this.ships.detail(Number(ship[1]));
       return detail ? json(JSON.stringify(detail)) : json('{"error":"unknown vessel"}', 404);
     }
+    const quota = path.match(/^\/quota\/([0-9a-f]{16,64})$/);
+    if (quota) return json(JSON.stringify(this.takeQuota(quota[1])));
+    if (path === "/history") return json(JSON.stringify(this.history.index()));
+    const frame = path.match(/^\/history\/(planes|ships)\/(\d+)$/);
+    if (frame) {
+      const body = this.history.frame(frame[1] as FrameKind, Number(frame[2]));
+      if (!body) return json('{"error":"no such frame"}', 404);
+      return new Response(body, {
+        headers: { "Content-Type": "application/json; charset=utf-8", "Content-Encoding": "gzip" },
+        encodeBody: "manual",
+      });
+    }
     if (path === "/health") {
       return json(JSON.stringify({ ...this.stats, ships: this.ships.size, planes: this.planes?.ids.length ?? 0, ais: !!this.ws }));
     }
@@ -81,7 +98,42 @@ export class Hub extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now() + POLL_MS);
     this.ensureAis();
     await Promise.allSettled([this.pollAircraft(), this.pollDigitraffic()]);
-    this.ships.prune(Math.floor(Date.now() / 1000));
+    const nowS = Math.floor(Date.now() / 1000);
+    this.ships.prune(nowS);
+    await this.recordHistory(nowS).catch((err) => console.error("history", err instanceof Error ? err.message : err));
+  }
+
+  /**
+   * Daily question allowance for the AI analyst, shared by every Vercel
+   * instance: per visitor (hashed IP) and in total, so the free Gemini quota
+   * cannot be exhausted by one person.
+   */
+  private quotaDay = "";
+  private quotaUsed = new Map<string, number>();
+  private quotaTotal = 0;
+
+  private takeQuota(visitor: string): { ok: boolean; left: number } {
+    const day = new Date().toISOString().slice(0, 10);
+    if (day !== this.quotaDay) {
+      this.quotaDay = day;
+      this.quotaUsed.clear();
+      this.quotaTotal = 0;
+    }
+    const used = this.quotaUsed.get(visitor) ?? 0;
+    if (used >= QUOTA_PER_VISITOR || this.quotaTotal >= QUOTA_TOTAL) return { ok: false, left: 0 };
+    this.quotaUsed.set(visitor, used + 1);
+    this.quotaTotal++;
+    return { ok: true, left: QUOTA_PER_VISITOR - used - 1 };
+  }
+
+  /** Keyframes for the replay timeline, aligned to 5-minute boundaries. */
+  private async recordHistory(nowS: number) {
+    const slot = nowS - (nowS % FRAME_EVERY_S);
+    if (this.planes && this.history.latest("planes") < slot) await this.history.record("planes", slot, planeFrame(this.planes));
+    // Right after a restart the ship map is still filling up; a partial frame would make the replay flicker.
+    if (this.ships.size > 5000 && this.history.latest("ships") < slot) {
+      await this.history.record("ships", slot, shipFrame(this.ships.snapshot(Date.now())));
+    }
   }
 
   private async pollAircraft() {
@@ -209,6 +261,7 @@ export class Hub extends DurableObject<Env> {
           });
           const drop = () => {
             if (this.ws === ws) this.ws = null;
+            this.stats.aisCloses++;
           };
           ws.addEventListener("close", drop);
           ws.addEventListener("error", drop);

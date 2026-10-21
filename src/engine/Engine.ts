@@ -176,6 +176,7 @@ export class Engine {
 
   dispose() {
     this.disposed = true;
+    window.clearInterval(this.historyTimer);
     this.renderer.setAnimationLoop(null);
     this.timers.forEach((t) => window.clearTimeout(t));
     this.observer.disconnect();
@@ -237,6 +238,49 @@ export class Engine {
   /** Points the camera at a place, keeping the current altitude unless given. */
   flyTo(lat: number, lon: number, dist?: number) {
     this.rig.flyTo({ lat, lon, dist: dist ?? Math.min(this.rig.goal.dist, 3) }, 1.4);
+  }
+
+  // ---------------------------------------------------------------- time
+
+  private historyTimer = 0;
+
+  /**
+   * Moves the simulated clock. Anything other than "now at 1×" is a replay:
+   * aircraft and ships switch from live polling to recorded 5-minute frames.
+   */
+  setTime(simMs: number, rate: number) {
+    const now = Date.now();
+    const t = Math.min(simMs, now);
+    if (rate === 1 && now - t < 5000) return this.goLive();
+    this.clock.set(t, rate);
+    if (!this.traffic.replay) {
+      this.traffic.setReplay(true);
+      const sel = useOrbis.getState().selection;
+      if (sel?.kind === "plane" || sel?.kind === "ship") useOrbis.getState().select(null);
+      const refresh = () => this.traffic.loadHistoryIndex().catch(() => undefined);
+      refresh();
+      window.clearInterval(this.historyTimer);
+      this.historyTimer = window.setInterval(refresh, 300_000);
+    }
+    useOrbis.setState({ time: { live: false, rate } });
+  }
+
+  goLive() {
+    this.clock.goLive();
+    window.clearInterval(this.historyTimer);
+    if (this.traffic.replay) {
+      this.traffic.setReplay(false);
+      const nowS = Date.now() / 1000;
+      this.traffic.loadPlanes(nowS, true).catch(() => undefined);
+      this.traffic.loadShips(nowS, true).catch(() => undefined);
+    }
+    useOrbis.setState({ time: { live: true, rate: 1 } });
+  }
+
+  /** Oldest moment with recorded aircraft or ships (Unix ms), if any. */
+  get historyStart(): number | null {
+    const s = this.traffic.historyStart;
+    return s === null ? null : s * 1000;
   }
 
   /** Everything the search palette can find. Ship names are fetched on first use. */
@@ -314,6 +358,11 @@ export class Engine {
     this.animateOpacity(dt);
 
     this.satellites.update(sim);
+    if (this.traffic.replay) {
+      // Playback that catches up with the present hands over to the live feeds.
+      if (this.clock.rate > 0 && sim >= Date.now()) this.goLive();
+      else this.traffic.syncReplay(sim / 1000);
+    }
     this.traffic.update(sim / 1000);
     this.quakes.update(sim, this.clockSeconds, this.rig.pose.dist);
     this.fires.update(sim, this.clockSeconds);

@@ -8,7 +8,9 @@ import { useOrbis } from "@/store/orbis";
 import type { FeedKey, LayerKey, Selection } from "@/engine/types";
 import { ArrowUpRight, Close, Recenter, Stack, Target } from "./icons";
 import { useNow } from "./hooks";
+import { Analyst } from "./Analyst";
 import { Search } from "./Search";
+import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
 
 const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
@@ -50,11 +52,14 @@ export function LiveHud() {
   return (
     <div className="pointer-events-none fixed inset-0 z-10">
       <TopBar live />
-      <Search />
+      <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 max-sm:top-[calc(max(1rem,env(safe-area-inset-top))+4rem)]">
+        <Analyst />
+        <Search />
+      </div>
       <h1 className="sr-only">{t.nav.live}</h1>
 
       {/* Layers: a side panel on wide screens, a sheet behind a button on phones. */}
-      <div className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-4 flex flex-col items-start gap-3 md:top-24 md:bottom-auto">
+      <div className="absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] left-4 flex flex-col items-start gap-3 md:top-24 md:bottom-auto">
         <button
           type="button"
           onClick={() => setPanelOpen((v) => !v)}
@@ -74,6 +79,7 @@ export function LiveHud() {
 
       {selection && <ObjectCard key={cardKey(selection)} selection={selection} />}
 
+      <Timeline />
       <Footnote />
     </div>
   );
@@ -290,7 +296,7 @@ function ObjectCard({ selection }: { selection: Selection }) {
   return (
     <aside
       aria-label={title}
-      className="bezel pointer-events-auto absolute right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] w-[min(22rem,calc(100vw-2rem))] animate-[card-in_0.7s_var(--ease-orbit)] md:top-24 md:bottom-auto"
+      className="bezel pointer-events-auto absolute right-4 bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] max-h-[calc(100dvh-16rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto animate-[card-in_0.7s_var(--ease-orbit)] md:top-24 md:bottom-auto"
     >
       <div className="bezel-core p-5">
         <div className="flex items-start justify-between gap-3">
@@ -348,7 +354,7 @@ function Footnote() {
   const locale = useLocale();
   const cloudsDate = useOrbis((s) => s.cloudsDate);
   return (
-    <div className="absolute right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] hidden max-w-sm flex-col items-end gap-1 text-right text-[11px] leading-snug text-dim lg:flex">
+    <div className="absolute right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] hidden max-w-[19rem] flex-col items-end gap-1 text-right text-[11px] leading-snug text-dim xl:flex">
       <p>{t.hud.hint}</p>
       <p>{cloudsDate ? fill(t.hud.clouds, { date: formatDate(cloudsDate, locale) }) : t.hud.cloudsArchive}</p>
     </div>

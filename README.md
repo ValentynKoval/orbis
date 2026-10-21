@@ -17,6 +17,12 @@ Live: https://orbis-live.vercel.app
   (cargo, tanker, passenger, fishing, leisure, service), with destination, size and a four-hour track.
 - **Search and filters.** One box (`/` or Ctrl+K) finds satellites, flights, ships and quakes and flies there;
   aircraft can be filtered by altitude, ships by type.
+- **Time machine.** A 24-hour timeline: scrub to any moment or play it back at 60× or 600×. Satellites are
+  re-propagated for that instant, the terminator and quakes follow, and aircraft and ships come from 5-minute frames
+  the relay records into its Durable Object's SQLite storage.
+- **Ask Orbis.** An AI analyst (Gemini, free tier) with tools: it queries live aircraft, ships, quakes, fires and
+  satellite positions, answers in Ukrainian or English, and moves the camera or opens the object it talks about.
+  Visitors get a daily question allowance enforced by the relay.
 - **Earthquakes.** USGS real-time feeds: every event of the past day plus M4.5+ of the week, drawn as rings that ripple
   from each epicentre, coloured by depth and fading with age.
 - **Fires.** NASA FIRMS VIIRS (NOAA-20) detections of the last 24 hours, merged into ~4 km cells, sized and coloured by
@@ -75,5 +81,5 @@ npm run dev
 
 1. Globe, landing, satellites, quakes, fires, clouds, city lights. *(done)*
 2. Live aircraft and ships through a relay, smooth motion for tens of thousands of objects, search, tracks. *(done)*
-3. 24-hour history with a replay timeline, an AI analyst that answers questions and moves the camera.
+3. 24-hour history with a replay timeline, an AI analyst that answers questions and moves the camera. *(done)*
 4. Mobile polish, sound, end-to-end tests, case study.

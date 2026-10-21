@@ -49,7 +49,8 @@ export default async function SourcesPage({ params }: PageProps<"/[locale]/sourc
         ))}
       </ul>
 
-      <p className="mt-10 max-w-[38rem] text-sm leading-relaxed text-dim">{t.sources.note}</p>
+      <p className="mt-10 max-w-[38rem] text-sm leading-relaxed text-haze">{t.sources.ai}</p>
+      <p className="mt-4 max-w-[38rem] text-sm leading-relaxed text-dim">{t.sources.note}</p>
     </main>
   );
 }
