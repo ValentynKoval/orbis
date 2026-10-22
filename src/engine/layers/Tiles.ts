@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { latLonToVec, vecToLatLon } from "@/lib/geo";
-import { providerFor, tileBounds, tileKey, type ImageryProvider } from "@/lib/tiles";
+import { providerFor, tileAt, tileBounds, tileKey, type ImageryProvider } from "@/lib/tiles";
 import { earthFragment, logDepth } from "../shaders";
 
 const SEGMENTS = 12;
@@ -13,6 +13,12 @@ const FADE_MS = 350;
 /** Tiles are used only when the camera is closer than this (Earth radii from the centre). */
 export const TILES_FROM_DIST = 3.4;
 const TILES_FULL_DIST = 2.6;
+/** Elevation is applied from this level; Terrarium tiles exist up to level 15. */
+const TERRAIN_FROM = 8;
+const TERRAIN_MAX = 15;
+export const TERRAIN_EXAGGERATION = 1.6;
+const EARTH_M = 6_371_000;
+const TERRARIUM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
 
 interface Node {
   z: number;
@@ -29,6 +35,9 @@ interface Node {
   mesh: THREE.Mesh | null;
   lastUsed: number;
   priority: number;
+  /** Metres above sea level at the (SEGMENTS+1)² grid points, south-west first. */
+  heights: Float32Array | null;
+  heightsLoading: boolean;
 }
 
 export const tilesVertex = /* glsl */ `
@@ -54,17 +63,41 @@ export const tilesFragment = earthFragment
   .replace("texture2D(uDay, vUv).rgb", "pow(texture2D(uDay, vTileUv).rgb, vec3(0.78)) * 1.5")
   .replace("gl_FragColor = vec4(lit + night + atmosphere, 1.0);", "gl_FragColor = vec4(lit + night + atmosphere, uFade);");
 
+/** Overlays (weather radar): the tile's own colours and alpha, nothing else. */
+const overlayFragment = /* glsl */ `
+  uniform sampler2D uDay;
+  uniform float uFade;
+  varying vec2 vTileUv;
+  void main() {
+    vec4 c = texture2D(uDay, vTileUv);
+    if (c.a < 0.02) discard;
+    gl_FragColor = vec4(c.rgb, c.a * uFade);
+    #include <colorspace_fragment>
+  }
+`;
+
+export interface TilesOptions {
+  /** Draw the tile images as a translucent overlay instead of as the planet's surface. */
+  overlay?: boolean;
+  /** Displace vertices with Mapzen Terrarium elevation tiles. */
+  terrain?: boolean;
+  /** Extra lift above the surface in Earth radii (overlays sit above imagery). */
+  lift?: number;
+}
+
 /**
- * Streams Web Mercator imagery tiles onto the globe as the camera closes in.
+ * Streams Web Mercator tiles onto the globe as the camera closes in.
  * A quadtree is refined by screen-space size; a parent stays drawn while its
  * children fade in, so refinement never pops. One material serves every tile:
- * the texture is swapped just before each draw.
+ * the texture is swapped just before each draw. With `terrain`, each patch is
+ * raised by real elevation and lit by its slopes.
  */
 export class Tiles {
   readonly group = new THREE.Group();
   readonly material: THREE.ShaderMaterial;
   /** Attribution lines of the providers drawn in the last frame. */
   attributions: string[] = [];
+  opacity = 1;
   private nodes = new Map<string, Node>();
   private inFlight = 0;
   private loader = new THREE.TextureLoader();
@@ -75,40 +108,55 @@ export class Tiles {
   private usedProviders = new Set<string>();
   private layerFade = 0;
   private anisotropy = 4;
+  private readonly terrain: boolean;
+  private readonly lift: number;
+  private scratch = document.createElement("canvas");
 
   constructor(
     private providers: ImageryProvider[],
     sharedUniforms: Record<string, THREE.IUniform>,
     anisotropy: number,
+    options: TilesOptions = {},
   ) {
     this.anisotropy = anisotropy;
+    this.terrain = !!options.terrain;
+    this.lift = options.lift ?? 0;
     this.loader.setCrossOrigin("anonymous");
-    this.material = new THREE.ShaderMaterial({
-      ...logDepth(tilesVertex, tilesFragment),
-      uniforms: { ...sharedUniforms, uDay: { value: null }, uFade: { value: 1 } },
-      transparent: true,
-      depthWrite: true,
-    });
-    this.group.renderOrder = 0.5;
+    this.scratch.width = this.scratch.height = TILE_PX;
+    this.material = options.overlay
+      ? new THREE.ShaderMaterial({
+          ...logDepth(tilesVertex, overlayFragment),
+          uniforms: { uDay: { value: null }, uFade: { value: 1 } },
+          transparent: true,
+          depthWrite: false,
+        })
+      : new THREE.ShaderMaterial({
+          ...logDepth(tilesVertex, tilesFragment),
+          uniforms: { ...sharedUniforms, uDay: { value: null }, uFade: { value: 1 } },
+          transparent: true,
+          depthWrite: true,
+        });
   }
 
   get maxLevel() {
     return Math.max(...this.providers.map((p) => p.maxLevel));
   }
 
+  /** Swaps providers (e.g. a new radar frame) and forgets every cached tile. */
   setProviders(providers: ImageryProvider[]) {
     this.providers = providers;
+    for (const n of [...this.nodes.values()]) this.dispose(n);
   }
 
   /** Call every frame; `dist` is the camera distance from the Earth's centre. */
   update(camera: THREE.PerspectiveCamera, viewportHeight: number, dist: number) {
     const now = performance.now();
-    this.layerFade = THREE.MathUtils.clamp((TILES_FROM_DIST - dist) / (TILES_FROM_DIST - TILES_FULL_DIST), 0, 1);
+    this.layerFade = THREE.MathUtils.clamp((TILES_FROM_DIST - dist) / (TILES_FROM_DIST - TILES_FULL_DIST), 0, 1) * this.opacity;
     for (const n of this.drawn) if (n.mesh) n.mesh.visible = false;
     this.drawn.clear();
     this.wanted.length = 0;
     this.usedProviders.clear();
-    if (this.layerFade <= 0) {
+    if (this.layerFade <= 0.005) {
       this.group.visible = false;
       this.attributions = [];
       return;
@@ -117,12 +165,38 @@ export class Tiles {
     this.projView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.projView);
     const pxPerRadian = viewportHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-    const root = 2;
+    const root = Math.min(...this.providers.map((p) => p.minLevel));
     const n = 2 ** root;
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) this.visit(root, x, y, camera.position, pxPerRadian, now);
-    this.pump(now);
+    this.pump();
     this.evict(now);
     this.attributions = this.providers.filter((p) => this.usedProviders.has(p.id)).map((p) => p.attribution);
+  }
+
+  /** Terrain height (metres, exaggerated) under a point, from the finest loaded tile; 0 when unknown. */
+  heightAt(lat: number, lon: number): number {
+    if (!this.terrain) return 0;
+    for (let z = TERRAIN_MAX; z >= TERRAIN_FROM; z--) {
+      const { x, y } = tileAt(z, lat, lon);
+      const node = this.nodes.get(tileKey(z, x, y));
+      if (!node?.heights) continue;
+      const b = tileBounds(z, x, y);
+      const u = (lon - b.west) / (b.east - b.west);
+      const v = (latToMercatorSafe(lat) - latToMercatorSafe(b.south)) / (latToMercatorSafe(b.north) - latToMercatorSafe(b.south));
+      const gx = THREE.MathUtils.clamp(u, 0, 1) * SEGMENTS;
+      const gy = THREE.MathUtils.clamp(v, 0, 1) * SEGMENTS;
+      const x0 = Math.floor(gx);
+      const y0 = Math.floor(gy);
+      const x1 = Math.min(SEGMENTS, x0 + 1);
+      const y1 = Math.min(SEGMENTS, y0 + 1);
+      const fx = gx - x0;
+      const fy = gy - y0;
+      const h = (r: number, c: number) => node.heights![r * (SEGMENTS + 1) + c];
+      const top = h(y0, x0) * (1 - fx) + h(y0, x1) * fx;
+      const bottom = h(y1, x0) * (1 - fx) + h(y1, x1) * fx;
+      return (top * (1 - fy) + bottom * fy) * TERRAIN_EXAGGERATION;
+    }
+    return 0;
   }
 
   private node(z: number, x: number, y: number): Node {
@@ -137,8 +211,25 @@ export class Tiles {
       latLonToVec(b.south, b.east),
     ].map((p) => new THREE.Vector3(...p));
     const center = new THREE.Vector3(...latLonToVec((b.north + b.south) / 2, (b.west + b.east) / 2));
-    const radius = Math.max(...corners.map((c) => c.distanceTo(center))) * 1.05;
-    node = { z, x, y, key, corners, center, radius, texture: null, loadedAt: 0, loading: false, failedAt: 0, mesh: null, lastUsed: 0, priority: 0 };
+    const radius = Math.max(...corners.map((c) => c.distanceTo(center))) * 1.05 + 0.002;
+    node = {
+      z,
+      x,
+      y,
+      key,
+      corners,
+      center,
+      radius,
+      texture: null,
+      loadedAt: 0,
+      loading: false,
+      failedAt: 0,
+      mesh: null,
+      lastUsed: 0,
+      priority: 0,
+      heights: null,
+      heightsLoading: false,
+    };
     this.nodes.set(key, node);
     return node;
   }
@@ -223,9 +314,10 @@ export class Tiles {
     const my1 = latToMercatorSafe(b.north);
     // Polygon offset has no effect with a logarithmic depth buffer, so tiles sit a few tens of
     // metres above the base sphere, deeper levels slightly higher than their parents.
-    const lift = 1 + 1e-5 + node.z * 2e-7;
+    const lift = 1 + 1e-5 + node.z * 2e-7 + this.lift;
     const count = (SEGMENTS + 1) ** 2;
     const pos = new Float32Array(count * 3);
+    const normal = new Float32Array(count * 3);
     const uv = new Float32Array(count * 2);
     const guv = new Float32Array(count * 2);
     let i = 0;
@@ -236,7 +328,11 @@ export class Tiles {
       for (let c = 0; c <= SEGMENTS; c++) {
         const u = c / SEGMENTS;
         const lon = b.west + (b.east - b.west) * u;
-        pos.set(latLonToVec(lat, lon, lift), i * 3);
+        const dir = latLonToVec(lat, lon);
+        const h = node.heights ? node.heights[i] * TERRAIN_EXAGGERATION : 0;
+        const radius = lift + Math.max(0, h) / EARTH_M;
+        pos.set([dir[0] * radius, dir[1] * radius, dir[2] * radius], i * 3);
+        normal.set(dir, i * 3);
         uv[i * 2] = u;
         uv[i * 2 + 1] = v;
         guv[i * 2] = 0.5 + lon / 360;
@@ -257,10 +353,11 @@ export class Tiles {
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    geometry.setAttribute("normal", new THREE.BufferAttribute(pos.map((v) => v / lift), 3));
+    geometry.setAttribute("normal", new THREE.BufferAttribute(normal, 3));
     geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
     geometry.setAttribute("aGlobalUv", new THREE.BufferAttribute(guv, 2));
     geometry.setIndex(index);
+    if (node.heights) geometry.computeVertexNormals();
     geometry.boundingSphere = new THREE.Sphere(node.center.clone(), node.radius);
     const mesh = new THREE.Mesh(geometry, this.material);
     mesh.frustumCulled = false;
@@ -269,7 +366,25 @@ export class Tiles {
     return mesh;
   }
 
-  private pump(now: number) {
+  /** Raises an existing patch once its elevation arrives. */
+  private applyHeights(node: Node) {
+    if (!node.mesh || !node.heights) return;
+    const geometry = node.mesh.geometry;
+    const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+    const lift = 1 + 1e-5 + node.z * 2e-7 + this.lift;
+    for (let i = 0; i < position.count; i++) {
+      const x = position.getX(i);
+      const y = position.getY(i);
+      const z = position.getZ(i);
+      const len = Math.hypot(x, y, z);
+      const radius = lift + Math.max(0, node.heights[i] * TERRAIN_EXAGGERATION) / EARTH_M;
+      position.setXYZ(i, (x / len) * radius, (y / len) * radius, (z / len) * radius);
+    }
+    position.needsUpdate = true;
+    geometry.computeVertexNormals();
+  }
+
+  private pump() {
     if (!this.wanted.length) return;
     this.wanted.sort((a, b) => b.priority - a.priority);
     for (const node of this.wanted) {
@@ -289,6 +404,7 @@ export class Tiles {
           node.loadedAt = performance.now();
           node.loading = false;
           this.inFlight--;
+          if (this.terrain && node.z >= TERRAIN_FROM) this.loadHeights(node);
         },
         undefined,
         () => {
@@ -298,7 +414,45 @@ export class Tiles {
         },
       );
     }
-    void now;
+  }
+
+  /** Samples a Terrarium tile (or the enclosing level-15 one) at the patch's grid points. */
+  private loadHeights(node: Node) {
+    if (node.heightsLoading || node.heights) return;
+    node.heightsLoading = true;
+    const tz = Math.min(node.z, TERRAIN_MAX);
+    const scale = 2 ** (node.z - tz);
+    const tx = Math.floor(node.x / scale);
+    const ty = Math.floor(node.y / scale);
+    const u0 = (node.x - tx * scale) / scale;
+    const v0 = (node.y - ty * scale) / scale;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      node.heightsLoading = false;
+      if (!this.nodes.has(node.key)) return;
+      const ctx = this.scratch.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0, TILE_PX, TILE_PX);
+      const data = ctx.getImageData(0, 0, TILE_PX, TILE_PX).data;
+      const heights = new Float32Array((SEGMENTS + 1) ** 2);
+      let i = 0;
+      for (let r = 0; r <= SEGMENTS; r++) {
+        // Grid rows run south → north; image rows run north → south.
+        const py = Math.min(TILE_PX - 1, Math.round((v0 + (1 - r / SEGMENTS) / scale) * (TILE_PX - 1)));
+        for (let c = 0; c <= SEGMENTS; c++) {
+          const px = Math.min(TILE_PX - 1, Math.round((u0 + c / SEGMENTS / scale) * (TILE_PX - 1)));
+          const k = (py * TILE_PX + px) * 4;
+          heights[i++] = data[k] * 256 + data[k + 1] + data[k + 2] / 256 - 32768;
+        }
+      }
+      node.heights = heights;
+      this.applyHeights(node);
+    };
+    img.onerror = () => {
+      node.heightsLoading = false;
+    };
+    img.src = `${TERRARIUM}/${tz}/${tx}/${ty}.png`;
   }
 
   private evict(now: number) {

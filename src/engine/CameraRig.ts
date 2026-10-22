@@ -15,7 +15,7 @@ function wrap(lon: number) {
 export class CameraRig {
   /** Closest approach to the centre, in Earth radii; set from the deepest imagery available. */
   minDist = 1.0012;
-  maxDist = 70;
+  maxDist = 400;
   /** Radius of the body being orbited: zoom and drag speeds scale with the altitude above it. */
   radius = 1;
   readonly pose: CameraPose = { lat: 18, lon: 20, dist: 4.4 };
@@ -42,6 +42,8 @@ export class CameraRig {
   private pinchDist = 0;
   private flyUntil = 0;
   private lastHover = 0;
+  /** A timed flight: the pose follows an ease-in-out curve from `from` to `to` (distance in log space). */
+  private glideState: { from: CameraPose; to: CameraPose; start: number; duration: number } | null = null;
 
   constructor(
     private camera: THREE.PerspectiveCamera,
@@ -52,6 +54,7 @@ export class CameraRig {
     el.addEventListener("pointerup", this.handleUp);
     el.addEventListener("pointercancel", this.handleUp);
     el.addEventListener("wheel", this.handleWheel, { passive: false });
+    window.addEventListener("keydown", this.handleKey);
   }
 
   dispose() {
@@ -60,6 +63,7 @@ export class CameraRig {
     this.el.removeEventListener("pointerup", this.handleUp);
     this.el.removeEventListener("pointercancel", this.handleUp);
     this.el.removeEventListener("wheel", this.handleWheel);
+    window.removeEventListener("keydown", this.handleKey);
   }
 
   /** Eases to a pose. `duration` is approximate: it sets how soft the approach is. */
@@ -68,8 +72,56 @@ export class CameraRig {
     if (target.lon !== undefined) this.goal.lon = this.pose.lon + wrap(target.lon - this.pose.lon);
     if (target.dist !== undefined) this.goal.dist = target.dist;
     this.velocity.lat = this.velocity.lon = 0;
+    this.glideState = null;
     this.stiffness = 4.2 / Math.max(0.3, duration);
     this.flyUntil = performance.now() + duration * 1000 * 1.6;
+  }
+
+  /**
+   * A cinematic flight: ease-in-out over exactly `duration` seconds, with the
+   * distance interpolated in log space so a long zoom moves at a steady visual
+   * pace. Any input cancels it. Longitude takes the short way round.
+   */
+  glide(target: Partial<CameraPose>, duration: number) {
+    const to: CameraPose = {
+      lat: target.lat ?? this.pose.lat,
+      lon: target.lon === undefined ? this.pose.lon : this.pose.lon + wrap(target.lon - this.pose.lon),
+      dist: target.dist ?? this.pose.dist,
+    };
+    this.velocity.lat = this.velocity.lon = 0;
+    this.glideState = { from: { ...this.pose }, to, start: performance.now(), duration: Math.max(0.05, duration) * 1000 };
+    Object.assign(this.goal, to);
+    this.flyUntil = 0;
+  }
+
+  get gliding() {
+    return this.glideState !== null;
+  }
+
+  /**
+   * Takes over another rig's motion mid-flight: the same distance (times
+   * `scale`), the same goal, the same easing or the same timed flight, so a
+   * scene hand-over neither stops nor kicks the camera.
+   */
+  continueFrom(other: CameraRig, scale: number) {
+    this.pose.dist = other.pose.dist * scale;
+    this.goal.dist = other.goal.dist * scale;
+    this.stiffness = other.stiffness;
+    this.flyUntil = other.flyUntil;
+    this.velocity.lat = other.velocity.lat;
+    this.velocity.lon = other.velocity.lon;
+    const g = other.glideState;
+    this.glideState = g
+      ? { from: { ...g.from, dist: g.from.dist * scale }, to: { ...g.to, dist: g.to.dist * scale }, start: g.start, duration: g.duration }
+      : null;
+    // The other rig's longitude frame differs by a constant; keep the flight's endpoints consistent with the pose we were given.
+    if (this.glideState) {
+      const shift = this.pose.lon - other.pose.lon;
+      this.glideState.from.lon += shift;
+      this.glideState.to.lon += shift;
+      this.goal.lon = this.glideState.to.lon;
+    }
+    other.glideState = null;
   }
 
   /** Sets the goal directly (scroll scrubbing); the camera still eases. */
@@ -98,11 +150,24 @@ export class CameraRig {
     this.goal.lat = THREE.MathUtils.clamp(this.goal.lat, -84, 84);
     this.goal.dist = THREE.MathUtils.clamp(this.goal.dist, this.minDist, this.maxDist);
 
-    const k = 1 - Math.exp(-dt * this.stiffness);
-    this.pose.lat += (this.goal.lat - this.pose.lat) * k;
-    this.pose.lon += (this.goal.lon - this.pose.lon) * k;
-    // Zoom eases in log space so far and near moves feel the same.
-    this.pose.dist = Math.exp(Math.log(this.pose.dist) + (Math.log(this.goal.dist) - Math.log(this.pose.dist)) * k);
+    const g = this.glideState;
+    if (g) {
+      const t = Math.min(1, (performance.now() - g.start) / g.duration);
+      const s = t * t * t * (t * (t * 6 - 15) + 10);
+      this.pose.lat = g.from.lat + (g.to.lat - g.from.lat) * s;
+      this.pose.lon = g.from.lon + (g.to.lon - g.from.lon) * s;
+      this.pose.dist = Math.exp(Math.log(g.from.dist) + (Math.log(g.to.dist) - Math.log(g.from.dist)) * s);
+      if (t >= 1) {
+        this.glideState = null;
+        Object.assign(this.goal, { lat: this.pose.lat, lon: this.pose.lon, dist: this.pose.dist });
+      }
+    } else {
+      const k = 1 - Math.exp(-dt * this.stiffness);
+      this.pose.lat += (this.goal.lat - this.pose.lat) * k;
+      this.pose.lon += (this.goal.lon - this.pose.lon) * k;
+      // Zoom eases in log space so far and near moves feel the same.
+      this.pose.dist = Math.exp(Math.log(this.pose.dist) + (Math.log(this.goal.dist) - Math.log(this.pose.dist)) * k);
+    }
     const ko = 1 - Math.exp(-dt * 3);
     this.offset += (this.offsetGoal - this.offset) * ko;
     this.offsetY += (this.offsetYGoal - this.offsetY) * ko;
@@ -123,11 +188,16 @@ export class CameraRig {
     }
   }
 
-  /** Degrees of rotation per pixel of drag, scaled so the surface tracks the finger. */
+  /**
+   * Degrees of rotation per pixel of drag. Around a body the surface tracks
+   * the finger; around a point (radius 0) a full-height drag turns about 50°
+   * whatever the distance, so a far view doesn't spin wildly.
+   */
   private dragScale() {
     const fov = THREE.MathUtils.degToRad(this.camera.fov);
+    if (this.radius <= 0) return THREE.MathUtils.radToDeg((2 * Math.tan(fov / 2)) / this.el.clientHeight) * 1.5;
     const visible = 2 * Math.tan(fov / 2) * (this.pose.dist - this.radius);
-    return THREE.MathUtils.radToDeg(visible / this.el.clientHeight) * 0.95;
+    return THREE.MathUtils.radToDeg(visible / (this.el.clientHeight * this.radius)) * 0.95;
   }
 
   private handleDown = (e: PointerEvent) => {
@@ -136,6 +206,7 @@ export class CameraRig {
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     this.velocity.lat = this.velocity.lon = 0;
     this.flyUntil = 0;
+    this.glideState = null;
     this.stiffness = 14;
     if (this.pointers.size === 1) this.down = { x: e.clientX, y: e.clientY, t: performance.now() };
     if (this.pointers.size === 2) {
@@ -203,6 +274,43 @@ export class CameraRig {
     this.down = null;
   };
 
+  /** Arrows turn the globe, + and − zoom; ignored while typing. */
+  private handleKey = (e: KeyboardEvent) => {
+    if (!this.interactive || e.metaKey || e.ctrlKey || e.altKey) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    const stepDeg = this.radius > 0 ? Math.max(0.05, Math.min(12, (this.goal.dist - this.radius) * 4)) : 4;
+    switch (e.key) {
+      case "ArrowLeft":
+        this.goal.lon -= stepDeg;
+        break;
+      case "ArrowRight":
+        this.goal.lon += stepDeg;
+        break;
+      case "ArrowUp":
+        this.goal.lat += stepDeg;
+        break;
+      case "ArrowDown":
+        this.goal.lat -= stepDeg;
+        break;
+      case "+":
+      case "=":
+        this.goal.dist = this.radius + (this.goal.dist - this.radius) * 0.8;
+        break;
+      case "-":
+      case "_":
+        this.goal.dist = this.radius + (this.goal.dist - this.radius) * 1.25;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    this.flyUntil = 0;
+    this.glideState = null;
+    this.stiffness = 6;
+    this.onUserMove?.();
+  };
+
   private handleWheel = (e: WheelEvent) => {
     if (!this.interactive) return;
     e.preventDefault();
@@ -210,6 +318,7 @@ export class CameraRig {
     const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
     this.goal.dist = this.radius + altitude * Math.exp(delta * 0.0012);
     this.flyUntil = 0;
+    this.glideState = null;
     this.stiffness = 8;
     this.onUserMove?.();
   };

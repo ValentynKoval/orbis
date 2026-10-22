@@ -2,12 +2,11 @@ import { DurableObject } from "cloudflare:workers";
 import { ADSB_ALL_URL, buildPlaneSnapshot, type AdsbAircraft } from "../../src/lib/feeds/adsb";
 import type { PlaneSnapshot, PlaneTrack } from "../../src/lib/feeds/live";
 import { FRAME_EVERY_S, History, planeFrame, shipFrame, type FrameKind } from "./history";
-import { parseAisMessage, ShipStore } from "./ships";
+import { ShipStore, type PositionUpdate, type StaticUpdate } from "./ships";
 
 export interface Env {
   HUB: DurableObjectNamespace<Hub>;
   RELAY_TOKEN: string;
-  AISSTREAM_API_KEY: string;
 }
 
 /** One aircraft list every 90 s: fresh enough with client-side extrapolation, gentle on adsb.lol. */
@@ -17,18 +16,23 @@ const QUOTA_PER_VISITOR = 15;
 const QUOTA_TOTAL = 300;
 const PLANE_TRACK_POINTS = 48;
 const PLANE_STALE_S = 20 * 60;
-const AIS_URL = "https://stream.aisstream.io/v0/stream";
+/**
+ * Ships: a GitHub Action listens to aisstream.io for about a minute every ten
+ * minutes and publishes the vessels it heard as a release asset (see
+ * .github/workflows/ais.yml). Holding the socket here would count every
+ * message against the Durable Objects free tier.
+ */
+const SHIPS_SNAPSHOT_URL = "https://github.com/ValentynKoval/orbis/releases/download/ais/ships.json.gz";
+const SHIPS_POLL_MS = 5 * 60_000;
 const DIGITRAFFIC = "https://meri.digitraffic.fi/api/ais/v1";
 const DT_HEADERS = { "Digitraffic-User": "Orbis/1.0", "Accept-Encoding": "gzip" };
 
 /**
- * The single always-on relay object: holds the aisstream WebSocket, polls
- * adsb.lol and Digitraffic on an alarm, and serves compact snapshots.
+ * The single always-on relay object: polls adsb.lol, the ships snapshot and
+ * Digitraffic on an alarm, and serves compact snapshots.
  */
 export class Hub extends DurableObject<Env> {
   private ships = new ShipStore();
-  private ws: WebSocket | null = null;
-  private wsConnecting = false;
   private planes: PlaneSnapshot | null = null;
   private planesJson = "";
   private planeTracks = new Map<string, number[]>();
@@ -36,7 +40,8 @@ export class Hub extends DurableObject<Env> {
   private shipsJsonAt = 0;
   private lastMeta = 0;
   private history: History;
-  private stats = { startedAt: Date.now(), aisMessages: 0, aisConnects: 0, aisCloses: 0, planeErrors: 0, planeError: "", lastPoll: 0 };
+  private stats = { startedAt: Date.now(), shipsSnapshotAt: 0, shipsSnapshotT: 0, shipsSnapshotError: "", planeErrors: 0, planeError: "", lastPoll: 0 };
+  private lastShipsPoll = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -47,7 +52,6 @@ export class Hub extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    this.ensureAis();
     const url = new URL(request.url);
     const path = url.pathname;
     const json = (body: string, status = 200) =>
@@ -89,15 +93,14 @@ export class Hub extends DurableObject<Env> {
       });
     }
     if (path === "/health") {
-      return json(JSON.stringify({ ...this.stats, ships: this.ships.size, planes: this.planes?.ids.length ?? 0, ais: !!this.ws }));
+      return json(JSON.stringify({ ...this.stats, ships: this.ships.size, planes: this.planes?.ids.length ?? 0 }));
     }
     return json('{"error":"not found"}', 404);
   }
 
   async alarm() {
     await this.ctx.storage.setAlarm(Date.now() + POLL_MS);
-    this.ensureAis();
-    await Promise.allSettled([this.pollAircraft(), this.pollDigitraffic()]);
+    await Promise.allSettled([this.pollAircraft(), this.pollShipsSnapshot(), this.pollDigitraffic()]);
     const nowS = Math.floor(Date.now() / 1000);
     this.ships.prune(nowS);
     await this.recordHistory(nowS).catch((err) => console.error("history", err instanceof Error ? err.message : err));
@@ -221,58 +224,28 @@ export class Hub extends DurableObject<Env> {
     }
   }
 
-  /** Opens the aisstream.io socket if it isn't open. Outgoing sockets keep the object in memory. */
-  private ensureAis() {
-    if (this.ws || this.wsConnecting) return;
-    this.wsConnecting = true;
-    this.ctx.waitUntil(
-      (async () => {
-        try {
-          const res = await fetch(AIS_URL, { headers: { Upgrade: "websocket" } });
-          const ws = res.webSocket;
-          if (!ws) throw new Error(`aisstream upgrade failed: ${res.status}`);
-          ws.accept();
-          ws.send(
-            JSON.stringify({
-              APIKey: this.env.AISSTREAM_API_KEY,
-              BoundingBoxes: [
-                [
-                  [-90, -180],
-                  [90, 180],
-                ],
-              ],
-              FilterMessageTypes: ["PositionReport", "StandardClassBPositionReport", "ShipStaticData"],
-            }),
-          );
-          const decoder = new TextDecoder();
-          const handle = (raw: string) => {
-            const parsed = parseAisMessage(raw);
-            if (!parsed) return;
-            this.stats.aisMessages++;
-            if (parsed.position) this.ships.position(parsed.position);
-            if (parsed.static) this.ships.static(parsed.static);
-          };
-          ws.addEventListener("message", (event) => {
-            // aisstream sends JSON in binary frames; depending on the runtime they arrive as a buffer or a Blob.
-            const data: unknown = event.data;
-            if (typeof data === "string") handle(data);
-            else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) handle(decoder.decode(data));
-            else if (data instanceof Blob) data.text().then(handle);
-          });
-          const drop = () => {
-            if (this.ws === ws) this.ws = null;
-            this.stats.aisCloses++;
-          };
-          ws.addEventListener("close", drop);
-          ws.addEventListener("error", drop);
-          this.ws = ws;
-          this.stats.aisConnects++;
-        } catch (err) {
-          console.error("aisstream", err instanceof Error ? err.message : err);
-        } finally {
-          this.wsConnecting = false;
-        }
-      })(),
-    );
+  /** Ingests the latest ships snapshot when a new one has been published. */
+  private async pollShipsSnapshot() {
+    const now = Date.now();
+    if (now - this.lastShipsPoll < SHIPS_POLL_MS) return;
+    this.lastShipsPoll = now;
+    try {
+      const res = await fetch(SHIPS_SNAPSHOT_URL, { headers: { "User-Agent": "Orbis/1.0 (+https://github.com/ValentynKoval/orbis)" }, signal: AbortSignal.timeout(30_000) });
+      if (!res.ok) throw new Error(`snapshot responded ${res.status}`);
+      const snapshot = (await new Response(res.body!.pipeThrough(new DecompressionStream("gzip"))).json()) as {
+        t1: number;
+        positions: PositionUpdate[];
+        statics: StaticUpdate[];
+      };
+      if (snapshot.t1 <= this.stats.shipsSnapshotT) return;
+      for (const p of snapshot.positions) this.ships.position(p);
+      for (const st of snapshot.statics) this.ships.static(st);
+      this.stats.shipsSnapshotT = snapshot.t1;
+      this.stats.shipsSnapshotAt = now;
+      this.stats.shipsSnapshotError = "";
+    } catch (err) {
+      this.stats.shipsSnapshotError = err instanceof Error ? err.message : String(err);
+      console.error("ships snapshot", this.stats.shipsSnapshotError);
+    }
   }
 }

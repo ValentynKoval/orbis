@@ -20,9 +20,12 @@ import { planeAltitude, Traffic } from "./layers/Traffic";
 import { Tiles } from "./layers/Tiles";
 import { Moon } from "./layers/Moon";
 import { Aurora } from "./layers/Aurora";
-import { SolarSystem, type BodyRef } from "./SolarSystem";
+import { SkyBodies } from "./layers/SkyBodies";
+import { EXIT_FLOOR_AU, HANDOVER_RADII, SolarSystem, type BodyRef } from "./SolarSystem";
+import { EARTH_RADIUS_AU } from "@/lib/orbits";
 import type { BodyRecord } from "@/lib/feeds/bodies";
-import { EOX, esriImagery, type ImageryProvider } from "@/lib/tiles";
+import type { SpacecraftTrack } from "@/lib/feeds/horizons";
+import { EOX, esriImagery, rainRadar, type ImageryProvider } from "@/lib/tiles";
 import { reticleFragment, reticleVertex, logDepth } from "./shaders";
 import type { FeedKey, LayerKey, Selection } from "./types";
 
@@ -34,8 +37,16 @@ const REFRESH_MS: Record<FeedKey, number> = {
   fires: 30 * 60_000,
   clouds: 6 * 3600_000,
   aurora: 10 * 60_000,
+  rain: 10 * 60_000,
 };
 const RETRY_MS = 45_000;
+/** Scene hand-over with a little hysteresis: out past ENTER radii the heliocentric scene takes over, back inside EXIT the Earth scene does. */
+const ENTER_RADII = HANDOVER_RADII * 1.01;
+const EXIT_RADII = HANDOVER_RADII / 1.01;
+/** How far the Earth camera may be asked to go: past the hand-over, so a fly-out never stalls there. */
+const EARTH_MAX_RADII = HANDOVER_RADII * 1.5;
+/** The heliocentric overview: the inner planets in one view. */
+const OVERVIEW = { lat: 32, distAu: 2.6 };
 
 export interface Overhead {
   at: number;
@@ -53,7 +64,7 @@ export class Engine {
   readonly rig: CameraRig;
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(32, 1, 0.01, 600);
+  private camera = new THREE.PerspectiveCamera(32, 1, 0.01, 8000);
   private inertial = new THREE.Group();
   private planet: Planet;
   private satellites: Satellites;
@@ -61,14 +72,20 @@ export class Engine {
   private fires: Fires;
   readonly traffic = new Traffic();
   private tiles: Tiles;
+  private rain: Tiles;
+  /** Closest approach to sea level, in Earth radii; terrain under the camera raises it. */
+  private baseMinDist = 1.0024;
   private moon: Moon;
   private aurora: Aurora;
+  private sky: SkyBodies;
   /** The heliocentric scene; rendered instead of the Earth scene while `space` is "system". */
   readonly system: SolarSystem;
   space: "earth" | "system" = "earth";
   private systemAssets: Promise<void> | null = null;
   private lastLabels = 0;
   private interactive = false;
+  /** Where to fly once the next hand-over between scenes has happened. */
+  private afterHandover: "overview" | "earth" | BodyRef | null = null;
   readonly ambience = new Ambience();
   /** Adaptive resolution: drops the pixel ratio when frames run long, restores it when there is headroom. */
   private maxPixelRatio = 1;
@@ -115,9 +132,13 @@ export class Engine {
     const providers: ImageryProvider[] = [EOX];
     const esriKey = process.env.NEXT_PUBLIC_ARCGIS_KEY;
     if (esriKey) providers.push(esriImagery(esriKey));
-    this.tiles = new Tiles(providers, this.planet.earthMaterial.uniforms, Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
+    const anisotropyMax = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    this.tiles = new Tiles(providers, this.planet.earthMaterial.uniforms, anisotropyMax, { terrain: true });
+    this.rain = new Tiles([], {}, 2, { overlay: true, lift: 6e-5 });
+    this.rain.group.renderOrder = 0.6;
     this.moon = new Moon(this.planet.sun);
     this.aurora = new Aurora(this.planet.sun);
+    this.sky = new SkyBodies(pixelRatio);
     this.system = new SolarSystem(canvas, pixelRatio);
     this.system.rig.onTap = (x, y) => {
       const rect = this.canvas.getBoundingClientRect();
@@ -147,11 +168,13 @@ export class Engine {
     this.reticle.renderOrder = 10;
 
     this.inertial.add(this.planet.stars, this.satellites.points, this.satellites.orbit);
+    this.scene.add(this.sky.sun, this.sky.markers);
     this.scene.add(
       this.inertial,
       this.planet.earth,
       this.moon.mesh,
       this.tiles.group,
+      this.rain.group,
       this.planet.borders,
       this.fires.points,
       this.quakes.mesh,
@@ -170,8 +193,10 @@ export class Engine {
     ) as Engine["opacity"];
 
     this.rig = new CameraRig(this.camera, canvas);
+    this.rig.maxDist = EARTH_MAX_RADII;
     // Sub-metre imagery lets the camera descend to a few hundred metres; 10 m imagery stops it ~13 km up.
-    this.rig.minDist = esriKey ? 1.00008 : 1.002;
+    this.baseMinDist = esriKey ? 1.0004 : 1.0024;
+    this.rig.minDist = this.baseMinDist;
     this.rig.onTap = (x, y) => useOrbis.getState().select(this.pick(x, y));
     this.rig.onHover = (x, y) => {
       this.canvas.style.cursor = this.pick(x, y) ? "pointer" : "grab";
@@ -192,31 +217,48 @@ export class Engine {
     const anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     const month = String(new Date(this.clock.now()).getUTCMonth() + 1).padStart(2, "0");
     const size = this.textureSize;
-    const jobs: [string, "uDay" | "uNight" | "uWater" | "uClouds", boolean][] = [
-      [`/textures/day-${month}-${size}.jpg`, "uDay", true],
-      [`/textures/night-${size}.jpg`, "uNight", false],
+    type Slot = "uDay" | "uNight" | "uWater" | "uClouds";
+    const load = async (url: string, slot: Slot, color: boolean) => {
+      const texture = await loader.loadAsync(url);
+      texture.colorSpace = color ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      texture.anisotropy = anisotropy;
+      texture.wrapS = THREE.RepeatWrapping;
+      if (this.disposed) return texture.dispose();
+      this.planet.setTexture(slot, texture);
+      this.renderer.initTexture(texture);
+    };
+    // First paint with small maps (~200 KB); the full-size ones replace them as they arrive.
+    const quick: [string, Slot, boolean][] = [
+      [`/textures/day-${month}-1k.jpg`, "uDay", true],
+      ["/textures/night-1k.jpg", "uNight", false],
       ["/textures/water-2k.png", "uWater", false],
-      ["/textures/clouds-fallback-2k.jpg", "uClouds", false],
     ];
     let done = 0;
     await Promise.all(
-      jobs.map(async ([url, slot, color]) => {
-        const texture = await loader.loadAsync(url);
-        texture.colorSpace = color ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-        texture.anisotropy = anisotropy;
-        texture.wrapS = THREE.RepeatWrapping;
-        if (this.disposed) return texture.dispose();
-        this.planet.setTexture(slot, texture);
-        this.renderer.initTexture(texture);
+      quick.map(async ([url, slot, color]) => {
+        await load(url, slot, color);
         done++;
-        useOrbis.setState({ progress: done / jobs.length });
+        useOrbis.setState({ progress: done / quick.length });
       }),
     );
     if (this.disposed) return;
     this.renderer.compile(this.scene, this.camera);
     this.renderer.setAnimationLoop(this.frame);
     useOrbis.setState({ ready: true });
+    (async () => {
+      await load(`/textures/day-${month}-${size}.jpg`, "uDay", true);
+      await load(`/textures/night-${size}.jpg`, "uNight", false);
+      await load("/textures/clouds-fallback-2k.jpg", "uClouds", false);
+    })().catch(() => undefined);
 
+    loader
+      .loadAsync("/textures/sun-1k.jpg")
+      .then((texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.wrapS = THREE.RepeatWrapping;
+        if (!this.disposed) this.sky.setSunTexture(texture);
+      })
+      .catch(() => undefined);
     new THREE.TextureLoader()
       .loadAsync("/textures/moon-2k.jpg")
       .then((texture) => {
@@ -232,6 +274,7 @@ export class Engine {
     this.schedule("fires", () => this.loadFires());
     this.schedule("clouds", () => this.loadClouds());
     this.schedule("aurora", () => this.loadAurora());
+    this.schedule("rain", () => this.loadRain());
     this.loadBorders();
   }
 
@@ -248,8 +291,10 @@ export class Engine {
     this.fires.dispose();
     this.traffic.dispose();
     this.tiles.disposeAll();
+    this.rain.disposeAll();
     this.moon.dispose();
     this.aurora.dispose();
+    this.sky.dispose();
     this.system.dispose();
     this.ambience.dispose();
     this.reticleMaterial.dispose();
@@ -352,6 +397,26 @@ export class Engine {
     return s === null ? null : s * 1000;
   }
 
+  /** Screen positions of the Sun, Moon and planets as seen from the Earth scene. */
+  private skyLabels() {
+    const v = new THREE.Vector3();
+    const out: ReturnType<SolarSystem["labels"]> = [];
+    const sim = this.clock.now();
+    const fade = THREE.MathUtils.smoothstep(this.rig.pose.dist, 14, 40);
+    if (fade <= 0) return out;
+    for (const m of this.sky.positions) {
+      const at = m.id === "moon" ? this.moon.position : ([m.dir[0] * 2500, m.dir[1] * 2500, m.dir[2] * 2500] as Vec3);
+      v.set(...at).project(this.camera);
+      if (v.z > 1 || Math.abs(v.x) > 1 || Math.abs(v.y) > 1) continue;
+      // Behind the Earth: skip when the direction passes through the planet.
+      const cam = this.camera.position;
+      if (m.id !== "moon" && occludedByEarth(cam, at[0], at[1], at[2])) continue;
+      out.push({ ref: { kind: "major", id: m.id }, name: m.id, x: ((v.x + 1) / 2) * this.width, y: ((1 - v.y) / 2) * this.height, px: 2, distanceAu: 0 });
+    }
+    void sim;
+    return out;
+  }
+
   /** ISS passes over a place for the next two days. */
   issPasses(lat: number, lon: number): Promise<Pass[]> {
     return this.satellites.issPasses(lat, lon, this.clock.now(), 48);
@@ -451,6 +516,17 @@ export class Engine {
     return { satellites: this.satellites.count };
   }
 
+  /** Called when the visitor takes the controls in either scene (the tour stops itself). */
+  watchUser(fn: (() => void) | null) {
+    this.rig.onUserMove = fn;
+    this.system.rig.onUserMove = fn;
+  }
+
+  /** Catalogue index of the ISS, or −1 until the element sets have loaded. */
+  get issIndex() {
+    return this.satellites.catalog?.issIndex ?? -1;
+  }
+
   // ---------------------------------------------------------------- frame
 
   private frame = () => {
@@ -469,10 +545,11 @@ export class Engine {
     const rotation = gmst(sim);
     this.inertial.rotation.y = -rotation;
     this.moon.update(sim, rotation);
+    this.sky.update(sim, this.planet.sun, rotation, this.clockSeconds, this.rig.pose.dist);
 
     this.rig.update(dt, this.width, this.height);
-    // Zooming out past the Moon hands over to the heliocentric scene.
-    if (this.rig.goal.dist >= this.rig.maxDist - 1e-6 && this.rig.pose.dist > this.rig.maxDist - 0.5) {
+    // Zooming out past the hand-over point, still heading out, hands over to the heliocentric scene mid-motion.
+    if (this.rig.pose.dist > ENTER_RADII && this.rig.goal.dist >= this.rig.pose.dist) {
       this.enterSystem();
       return;
     }
@@ -485,7 +562,11 @@ export class Engine {
     }
     this.animateOpacity(dt);
     this.tiles.update(this.camera, this.height, this.rig.pose.dist);
-    const attributions = this.tiles.attributions;
+    this.rain.update(this.camera, this.height, this.rig.pose.dist);
+    // Never fly into a mountain: the floor follows the terrain under the camera.
+    const foot = vecToLatLon([this.camera.position.x, this.camera.position.y, this.camera.position.z]);
+    this.rig.minDist = this.baseMinDist + (this.tiles.heightAt(foot.lat, foot.lon) + 300) / 6_371_000;
+    const attributions = [...this.tiles.attributions, ...this.rain.attributions];
     if (attributions.join("|") !== this.lastAttribution) {
       this.lastAttribution = attributions.join("|");
       useOrbis.setState({ imageryAttribution: attributions });
@@ -503,6 +584,10 @@ export class Engine {
     this.aurora.update(this.clockSeconds);
     this.updateReticle(sim);
     this.updateLiveDetails(sim, now);
+    if (now - this.lastLabels > 120) {
+      this.lastLabels = now;
+      useOrbis.setState({ systemLabels: this.rig.pose.dist > 14 ? this.skyLabels() : [] });
+    }
 
     this.renderer.render(this.scene, this.camera);
     this.adaptQuality(now, dt);
@@ -513,7 +598,8 @@ export class Engine {
   private systemFrame(sim: number, dt: number, now: number) {
     const s = this.system;
     s.update(sim, dt, this.width, this.height);
-    if (s.focus.kind === "major" && s.focus.id === "earth" && s.rig.goal.dist <= s.rig.minDist + 1e-12 && s.rig.pose.dist < s.rig.minDist * 1.03) {
+    // Back inside the hand-over point, still heading in and settled on the Earth: the Earth scene takes over mid-motion.
+    if (s.focus.kind === "major" && s.focus.id === "earth" && !s.inTransit && s.rig.pose.dist < EXIT_RADII * EARTH_RADIUS_AU && s.rig.goal.dist <= s.rig.pose.dist) {
       this.exitSystem();
       return;
     }
@@ -535,18 +621,44 @@ export class Engine {
     s.setFocus({ kind: "major", id: "earth" }, sim);
     s.rig.pose.lat = s.rig.goal.lat = this.rig.pose.lat;
     s.rig.pose.lon = s.rig.goal.lon = this.rig.pose.lon + rotation;
-    s.rig.pose.dist = s.rig.goal.dist = s.rig.minDist * 1.08;
+    // The same distance, goal and easing as the Earth camera: the motion simply carries on in AU.
+    s.rig.continueFrom(this.rig, EARTH_RADIUS_AU);
+    if (s.rig.pose.dist < ENTER_RADII * EARTH_RADIUS_AU) {
+      // Entered directly (a shared link): start just outside the hand-over, heading out.
+      s.rig.pose.dist = ENTER_RADII * EARTH_RADIUS_AU;
+      s.rig.goal.dist = Math.max(s.rig.goal.dist, s.rig.pose.dist * 1.5);
+    }
+    this.rig.maxDist = EARTH_MAX_RADII;
     s.rig.setAutoRotate(0);
     s.rig.setOffset(0, 0);
     this.rig.interactive = false;
     s.rig.interactive = this.interactive;
     this.canvas.style.cursor = "grab";
     this.ensureSystemAssets();
-    useOrbis.setState({ space: "system", focusBody: s.focus, selectedBody: null, systemLabels: [] });
-    if (overview) s.rig.flyTo({ lat: 32, dist: 2.6 }, 3);
+    useOrbis.setState({ space: "system", focusBody: s.focus, selectedBody: null });
+    const after = this.afterHandover;
+    this.afterHandover = null;
+    if (overview || (after === "overview" && !s.rig.gliding)) s.rig.flyTo({ lat: OVERVIEW.lat, dist: OVERVIEW.distAu }, 4.5);
+    else if (after && typeof after === "object") {
+      useOrbis.getState().select(null);
+      useOrbis.getState().focusOn(after);
+    }
   }
 
-  /** Back to the Earth scene, looking the same way the heliocentric camera did. */
+  /**
+   * Flies out of the Earth scene toward the heliocentric overview (or a body).
+   * The goal lies past the hand-over point, so the camera is still accelerating
+   * outward when the heliocentric scene picks the motion up.
+   */
+  goToSystem(focus?: BodyRef) {
+    if (this.space === "system") return;
+    this.afterHandover = focus ?? "overview";
+    const dist = focus ? HANDOVER_RADII * 1.6 : OVERVIEW.distAu / EARTH_RADIUS_AU;
+    this.rig.maxDist = Math.max(EARTH_MAX_RADII, dist);
+    this.rig.glide(focus ? { dist } : { lat: OVERVIEW.lat, dist }, focus ? 3 : 7);
+  }
+
+  /** Back to the Earth scene, looking the same way the heliocentric camera did, with the same motion. */
   exitSystem() {
     if (this.space === "earth") return;
     this.space = "earth";
@@ -554,18 +666,33 @@ export class Engine {
     const rotation = THREE.MathUtils.radToDeg(gmst(this.clock.now()));
     this.rig.pose.lat = this.rig.goal.lat = s.rig.pose.lat;
     this.rig.pose.lon = this.rig.goal.lon = s.rig.pose.lon - rotation;
-    this.rig.pose.dist = this.rig.goal.dist = this.rig.maxDist * 0.94;
+    this.rig.continueFrom(s.rig, 1 / EARTH_RADIUS_AU);
+    this.rig.pose.dist = Math.min(this.rig.maxDist, this.rig.pose.dist);
+    this.rig.goal.dist = Math.min(this.rig.pose.dist, this.rig.goal.dist);
+    s.rig.minDist = EXIT_FLOOR_AU;
     s.rig.interactive = false;
     this.rig.interactive = this.interactive;
     s.select(null);
     if (!useOrbis.getState().time.live && this.clock.now() > Date.now()) this.goLive();
-    useOrbis.setState({ space: "earth", systemLabels: [], selectedBody: null });
+    useOrbis.setState({ space: "earth", selectedBody: null });
+    // A "back to Earth" flight was aimed at the usual view; anything else just settles where it is.
+    if (this.afterHandover === "earth" && this.rig.goal.dist > 12) this.rig.flyTo({ dist: 4.4 }, 2.6);
+    this.afterHandover = null;
   }
 
-  /** Flies the heliocentric camera to the Earth; the hand-over to the Earth scene happens on arrival. */
+  /** The inner solar system from above, centred on the Sun, from wherever the camera is. */
+  overview() {
+    if (this.space === "earth") return this.goToSystem();
+    this.system.flyToBody({ kind: "major", id: "sun" }, this.clock.now(), OVERVIEW.distAu);
+    this.system.rig.goal.lat = OVERVIEW.lat;
+    useOrbis.setState({ focusBody: this.system.focus });
+  }
+
+  /** Flies the heliocentric camera to the Earth; the hand-over to the Earth scene happens on the way in. */
   returnToEarth() {
     if (this.space !== "system") return;
-    this.system.flyToBody({ kind: "major", id: "earth" }, this.clock.now());
+    this.afterHandover = "earth";
+    this.system.flyToBody({ kind: "major", id: "earth" }, this.clock.now(), 4.4 * EARTH_RADIUS_AU);
     useOrbis.setState({ focusBody: this.system.focus });
   }
 
@@ -576,6 +703,8 @@ export class Engine {
       if (!res.ok) throw new Error(`bodies ${res.status}`);
       const data: { comets: BodyRecord[]; asteroids: BodyRecord[] } = await res.json();
       if (!this.disposed) this.system.setBodies(data.comets, data.asteroids);
+      const craft = await fetch("/api/spacecraft");
+      if (craft.ok && !this.disposed) this.system.setCraft(((await craft.json()) as { craft: SpacecraftTrack[] }).craft);
     })().catch(() => {
       this.systemAssets = null;
     });
@@ -612,17 +741,22 @@ export class Engine {
     const k = 1 - Math.exp(-dt * 5);
     for (const key of Object.keys(this.opacity) as LayerKey[]) {
       const o = this.opacity[key];
-      const dataLayer = key === "satellites" || key === "planes" || key === "ships" || key === "quakes" || key === "fires" || key === "aurora";
+      const dataLayer = key === "satellites" || key === "planes" || key === "ships" || key === "quakes" || key === "fires" || key === "aurora" || key === "rain";
       const focusScale = this.focus && dataLayer && this.focus !== key ? 0.18 : 1;
       o.value += (o.target * focusScale - o.value) * k;
     }
-    this.satellites.setOpacity(this.opacity.satellites.value);
-    this.quakes.setOpacity(this.opacity.quakes.value);
-    this.fires.setOpacity(this.opacity.fires.value);
-    this.traffic.planes.setOpacity(this.opacity.planes.value);
-    this.traffic.ships.setOpacity(this.opacity.ships.value);
-    this.traffic.track.visible &&= this.opacity.planes.value + this.opacity.ships.value > 0.02;
+    // Far out, the data thins away long before the hand-over, so nothing is left to vanish at the switch.
+    const dist = this.rig.pose.dist;
+    const farFade = 1 - THREE.MathUtils.smoothstep(dist, 150, HANDOVER_RADII * 0.85);
+    const surfaceFade = 1 - THREE.MathUtils.smoothstep(dist, 40, 170);
+    this.satellites.setOpacity(this.opacity.satellites.value * farFade);
+    this.quakes.setOpacity(this.opacity.quakes.value * surfaceFade);
+    this.fires.setOpacity(this.opacity.fires.value * surfaceFade);
+    this.traffic.planes.setOpacity(this.opacity.planes.value * surfaceFade);
+    this.traffic.ships.setOpacity(this.opacity.ships.value * surfaceFade);
+    this.traffic.track.visible &&= (this.opacity.planes.value + this.opacity.ships.value) * surfaceFade > 0.02;
     this.aurora.setOpacity(this.opacity.aurora.value);
+    this.rain.opacity = this.opacity.rain.value * 0.85;
     this.planet.setCloudsOpacity(this.opacity.clouds.value);
     this.planet.setLights(this.opacity.lights.value);
     this.planet.setBordersOpacity(this.opacity.borders.value);
@@ -889,6 +1023,23 @@ export class Engine {
     }
     useOrbis.setState({ auroraKp: meta.kp ?? null });
     setFeed("aurora", { status: "ready", count: 1, updated: Date.now() });
+  }
+
+  private async loadRain() {
+    const res = await fetch("/api/rain");
+    if (!res.ok) throw new Error(`rain ${res.status}`);
+    const frame: { host: string; path: string; time: number } = await res.json();
+    if (this.disposed) return;
+    this.rain.setProviders([rainRadar(frame.host, frame.path)]);
+    setFeed("rain", { status: "ready", count: 1, updated: frame.time });
+  }
+
+  /** Numbers for the debug readout. */
+  perf() {
+    const r = this.renderer.info.render;
+    const times = this.frameTimes.slice(-60);
+    const avg = times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0;
+    return { fps: avg ? Math.round(1 / avg) : 0, calls: r.calls, triangles: r.triangles, pixelRatio: this.renderer.getPixelRatio(), tiles: this.tiles.attributions.length ? this.tiles.group.children.filter((c) => c.visible).length : 0 };
   }
 
   private async loadBorders() {

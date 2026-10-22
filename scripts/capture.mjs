@@ -63,6 +63,7 @@ for (const [name, query] of [
   ["moon", `at=${(moonLL.lat + 0.8).toFixed(2)},${(moonLL.lon + 0.9).toFixed(2)},69.5&t=${newMoon}`],
   ["saturn", `space=saturn&at=${(sunward.lat + 18).toFixed(2)},${(sunward.lon + 30).toFixed(2)},0.0036`],
   ["system", "space=earth&at=35,120,3.2"],
+  ["alps", "at=45.95,7.7,1.0035"],
 ]) {
   page = await desktop.newPage();
   await page.goto(`${base}/en/live?${query}`);

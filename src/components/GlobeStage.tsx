@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useOrbis } from "@/store/orbis";
+import { Engine } from "@/engine/Engine";
 import { useDict } from "@/i18n/client";
 
 /**
@@ -19,9 +20,9 @@ export function GlobeStage() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let disposed = false;
-    let engine: import("@/engine/Engine").Engine | null = null;
-    // three.js stays out of the first-load bundle; the page paints before it arrives.
-    import("@/engine/Engine").then(({ Engine }) => {
+    let engine: Engine | null = null;
+    // Deferred to a microtask so the first paint of the page isn't blocked by WebGL setup.
+    Promise.resolve().then(() => {
       if (disposed) return;
       const lite = window.matchMedia("(pointer: coarse)").matches || Math.min(window.innerWidth, window.innerHeight) < 600;
       try {

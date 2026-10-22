@@ -18,8 +18,11 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
 | **Manhattan from 13 km up (Sentinel-2, 10 m)** | **The Moon from 48 Earth radii** |
 | --- | --- |
 | ![Manhattan from 13 km up](docs/media/street.jpg) | ![The Moon beside the Earth](docs/media/moon.jpg) |
-| **Saturn** | **The inner solar system** |
-| ![Saturn with its rings](docs/media/saturn.jpg) | ![Planets, comets and asteroids around the Sun](docs/media/system.jpg) |
+| **The Alps in 3D (Terrarium elevation)** | **Saturn** |
+| --- | --- |
+| ![The Alps with real relief](docs/media/alps.jpg) | ![Saturn with its rings](docs/media/saturn.jpg) |
+| **The inner solar system** | |
+| ![Planets, comets and asteroids around the Sun](docs/media/system.jpg) | |
 
 <img src="docs/media/phone.jpg" alt="Orbis on a phone, Ukrainian interface" width="260">
 
@@ -31,6 +34,13 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
 - **Out to the planets.** Zoom past the Moon and the scene hands over to a heliocentric view: the Sun, eight planets
   at real size and real positions (JPL elements), the Moon, ~900 large asteroids and famous or currently active
   comets from NASA/JPL, with orbits, labels, close-approach lists and a clock that runs at up to a month per second.
+- **Mountains in 3D.** Zoomed in, each tile is raised by real elevation (Mapzen Terrarium, 1.6×) and lit by its slopes; the camera never flies into a ridge.
+- **Live weather.** RainViewer radar painted over the terrain, refreshed every 10 minutes, and Open-Meteo conditions for your place.
+- **Deep space.** Voyager 1 and 2, New Horizons, JWST, Parker Solar Probe and Europa Clipper from JPL Horizons, with their paths a year behind and ahead.
+- **One continuous zoom.** The Earth scene runs out to 400 Earth radii with the Sun, Moon and planets already in the sky, then hands over to the heliocentric scene mid-flight: the camera keeps its distance, direction and easing, data layers thin out long before the switch, labels carry across and the HUD cross-fades, so nothing jumps.
+- **Flights between worlds.** Choosing a planet glides the orbit centre from one body to the next while the camera pulls back and dives, instead of cutting. Labels step aside from each other and from the edges of the screen.
+- **Guided tour.** One button (or `/live?tour=1`) flies through everything live: the ISS, the busiest sky and sea lanes, the strongest quake of the day, fires, city lights, the aurora oval, then out past the Moon to Saturn, Voyager 1 and a month-per-second view of the inner solar system, and home. Touching the controls ends it.
+- **The Sun, live.** The Sun's card shows SDO's latest AIA 304 Å frame and the solar wind at L1 (speed, field strength, Bz) from NOAA SWPC.
 - **Aurora.** NOAA's OVATION forecast drawn as curtains over the night side, with the live Kp index.
 - **The sky above me.** ISS passes for your place over the next two days (naked-eye visibility included) and what is
   overhead right now: nearby aircraft and satellites high above the horizon.
@@ -40,8 +50,10 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
 - **Aircraft.** ~12,000 aircraft worldwide from the adsb.lol community network, refreshed every 90 seconds and
   flown along great circles on the GPU in between; each update blends from where an icon was drawn, so nothing jumps.
   Tap one for flight, registration, type, altitude, speed and its track over the last hour.
-- **Ships.** ~20,000 vessels from the global aisstream.io AIS feed plus Finland's Digitraffic, coloured by type
-  (cargo, tanker, passenger, fishing, leisure, service), with destination, size and a four-hour track.
+- **Ships.** Vessels heard on the global aisstream.io AIS feed (a GitHub Action listens for about a minute every
+  ten minutes and publishes a snapshot the relay ingests) plus Finland's Digitraffic, coloured by type (cargo, tanker,
+  passenger, fishing, leisure, service), with destination, size and a four-hour track. Between snapshots they keep
+  moving along their course.
 - **Search and filters.** One box (`/` or Ctrl+K) finds satellites, flights, ships and quakes and flies there;
   aircraft can be filtered by altitude, ships by type.
 - **Time machine.** A 24-hour timeline: scrub to any moment or play it back at 60× or 600×. Satellites are
@@ -62,6 +74,8 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
   busiest fire region, the most populated part of the night side.
 - **Shareable views.** The share button copies a link with the camera, time and layers; `/live?at=lat,lon,distance&t=…&layers=…&space=mars`.
 - **Sound.** An optional generative ambient bed (Web Audio, no files) with a soft chime on selection.
+- **Fast first paint.** The globe appears with 200 KB of maps (preloaded with the HTML) and swaps to 4k in the background.
+- **Keyboard.** Arrows turn the globe, + and − zoom, / searches, D shows the frame-time readout.
 - **Adaptive quality.** The renderer lowers its pixel ratio when frames run long and restores it when there is headroom.
 - Ukrainian and English interface.
 
@@ -69,7 +83,7 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
 
 Next.js 16 (App Router), TypeScript, three.js with hand-written GLSL shaders, satellite.js, GSAP, Zustand,
 Tailwind CSS 4, Vitest. Hosted on Vercel; live traffic comes through a relay on Cloudflare Workers (one Durable
-Object holding the AIS WebSocket and polling the aircraft feed); a GitHub Action mirrors CelesTrak data.
+Object polling the aircraft feed and ingesting ship snapshots); GitHub Actions mirror CelesTrak data and listen to the AIS stream.
 
 ```
 src/engine/          renderer, camera rig, simulated clock, layers (incl. imagery tiles, aurora, Moon), shaders, SGP4 worker
@@ -77,8 +91,8 @@ src/engine/SolarSystem.ts  heliocentric scene with a floating origin
 src/app/api/*        feed routes: fetch upstream once, cache on the CDN, serve everyone
 src/lib/             astronomy, geometry, feed parsers, tour logic (unit-tested)
 src/i18n/            UA / EN dictionaries
-relay/               Cloudflare Worker + Durable Object: AIS stream, aircraft polling, tracks, snapshots
-scripts/             asset pipeline for NASA and Natural Earth imagery
+relay/               Cloudflare Worker + Durable Object: aircraft polling, ship snapshots, tracks, history
+scripts/             asset pipeline for NASA and Natural Earth imagery, the AIS collector, captures, timings
 ```
 
 ## Data and costs
@@ -94,6 +108,9 @@ one-download-per-update rule. Full credits are on the site's Sources page.
 | Imagery | EOX Sentinel-2 cloudless 2024; Esri World Imagery (optional key) | CC BY-NC-SA 4.0; Esri terms |
 | Solar system | NASA/JPL SBDB and CAD; planet maps by Solar System Scope | Free; CC BY 4.0 |
 | Aurora | NOAA SWPC OVATION, Kp | Public domain |
+| Terrain | Mapzen Terrarium on AWS Open Data | Various open (see source) |
+| Rain radar, weather | RainViewer; Open-Meteo | Non-commercial; CC BY 4.0 |
+| Spacecraft | NASA/JPL Horizons | Public domain |
 | Aircraft | adsb.lol | ODbL 1.0 |
 | Ships | aisstream.io, Digitraffic (Fintraffic) | Free; CC BY 4.0 |
 | Earthquakes | USGS Earthquake Hazards Program | Public domain |
@@ -119,3 +136,6 @@ suite (desktop and phone) against that build. `npm run assets` regenerates the t
 2. Live aircraft and ships through a relay, smooth motion for tens of thousands of objects, search, tracks. *(done)*
 3. 24-hour history with a replay timeline, an AI analyst that answers questions and moves the camera. *(done)*
 4. Mobile polish, sound, end-to-end tests, case study. *(done)*
+5. Street-level imagery, the solar system, aurora, sky passes, shareable views. *(done)*
+6. Terrain, rain radar, spacecraft, a continuous Earth-to-system hand-over, faster first paint. *(done)*
+7. Cinematic flights, a guided tour, the live Sun, labels that never overlap. *(done)*

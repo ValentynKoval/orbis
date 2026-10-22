@@ -52,6 +52,9 @@ interface OrbisState {
   select(selection: Selection | null): void;
   sound: boolean;
   toggleSound(): void;
+  /** The guided tour is running. */
+  tour: boolean;
+  setTour(on: boolean): void;
   setPlaneFilter(filter: PlaneFilter): void;
   toggleShipKind(kind: number): void;
 }
@@ -64,14 +67,16 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   progress: 0,
   ready: false,
   webglError: false,
-  layers: { satellites: true, planes: true, ships: true, quakes: true, fires: true, aurora: true, clouds: true, lights: true, borders: false },
-  feeds: { satellites: idle, planes: idle, ships: idle, quakes: idle, fires: idle, clouds: idle, aurora: idle },
+  layers: { satellites: true, planes: true, ships: true, quakes: true, fires: true, aurora: true, rain: true, clouds: true, lights: true, borders: false },
+  feeds: { satellites: idle, planes: idle, ships: idle, quakes: idle, fires: idle, clouds: idle, aurora: idle, rain: idle },
   selection: null,
   selectionLive: null,
   selectionDetail: null,
   planeFilter: "all",
   time: { live: true, rate: 1 },
   sound: false,
+  tour: false,
+  setTour: (tour) => set({ tour }),
   toggleSound: () => {
     const sound = !get().sound;
     set({ sound });

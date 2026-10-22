@@ -24,11 +24,16 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
 - Account: Valentyn's Cloudflare (`valentyn.golf@gmail.com`), URL `https://orbis-relay.valentyngolf.workers.dev`.
   The global wrangler login on this PC belongs to Maxim, so **every wrangler command for Orbis runs with
   `XDG_CONFIG_HOME='C:\Users\Valentyn\.orbis-wrangler'`** (Valentyn's login lives there). Never run `wrangler login` globally.
-- The `Hub` object holds the aisstream.io WebSocket (global, compressed), polls adsb.lol every 90 s and Digitraffic,
-  keeps ship and plane tracks in memory, and serves JSON snapshots. One always-on object uses ~10,800 of the
-  13,000 free GB-s per day: do not add a second always-on object.
+- The `Hub` object polls adsb.lol every 90 s and Digitraffic, ingests the ships snapshot every 5 min, keeps ship
+  and plane tracks in memory, and serves JSON snapshots. One always-on object uses ~10,800 of the 13,000 free GB-s
+  per day: do not add a second always-on object.
+- **Never hold the aisstream.io WebSocket in the Durable Object.** Every incoming message counts as a request and the
+  free tier (100k/day) was exhausted by midday (error 1101 "Exceeded allowed volume of requests"), killing planes too.
+  Ships now come from `.github/workflows/ais.yml`: every 10 min `scripts/collect-ais.mjs` listens for 100 s and uploads
+  `ships.json.gz` to the GitHub release `ais` (`--clobber`, no git history growth); the hub downloads it. The AIS key is a
+  repository secret (`AISSTREAM_API_KEY`); the `ais` release is a data container, not a software release.
 - Only requests with `x-orbis-key: RELAY_TOKEN` are served; Vercel holds the token (`RELAY_URL`, `RELAY_TOKEN` env).
-  Secrets on the worker: `RELAY_TOKEN`, `AISSTREAM_API_KEY` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
+  Secrets on the worker: `RELAY_TOKEN` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
 - OpenSky is not used: it does not answer requests from Cloudflare or Vercel (AWS) networks. Aircraft come from
   adsb.lol (ODbL), which must stay credited on the Sources page.
 - The `data` branch is refreshed by `.github/workflows/data.yml` every 2 h: CelesTrak element sets and the cloud mask
@@ -36,7 +41,7 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
 - History: the hub writes one gzipped frame per kind every 5 min (planes: motion columns only; ships: full snapshot)
   into its SQLite table `frames`, keeps 25 h. `/history` lists frames, `/history/{planes|ships}/{t}` serves the gzip as-is.
 - AI analyst quota lives in the hub (`/quota/{visitorHash}`): 15 questions per visitor and 300 in total per UTC day.
-- Deploy: `cd relay && XDG_CONFIG_HOME=... npx wrangler deploy`. A deploy restarts the object; ships repopulate in minutes.
+- Deploy: `cd relay && XDG_CONFIG_HOME=... npx wrangler deploy`. A deploy restarts the object; ships repopulate on the next snapshot poll.
 
 ## AI analyst
 
@@ -73,9 +78,21 @@ On this PC `next build` may need `NODE_OPTIONS=--max-old-space-size=4096`. Stop 
   screen-space error; a parent stays drawn while children fade in. Providers: EOX (levels 2–13, keyless, CC BY-NC-SA)
   and Esri via `NEXT_PUBLIC_ARCGIS_KEY` (14–19). Never use Esri or Bing tiles without a key: their terms forbid it.
   Tiles share the planet shader's uniforms, so lighting and clouds match the base sphere.
-- Solar system (`engine/SolarSystem.ts`): separate scene in AU with a floating origin at the focused body; the Earth
-  scene hands over at 70 Earth radii (`CameraRig.maxDist`) and takes back at `minDist`. `lib/orbits.ts` has the
-  ephemerides (JPL planet elements, Meeus Moon, Kepler solver for JPL small-body elements), all unit-tested.
+- Terrain: `Tiles` with `terrain: true` samples Terrarium PNGs (levels ≥ 8, max 15) at the 13×13 grid and raises
+  vertices by `TERRAIN_EXAGGERATION`; `heightAt()` feeds the camera floor every frame. Overlays (rain radar) are a
+  second `Tiles` with `overlay: true`. Textures load progressively: 1k maps first (preloaded in the layout), full size after.
+- Hand-over (`Engine.ts`): the Earth scene runs past 400 radii with `SkyBodies` (Sun billboard, planet markers) and
+  hands over when the pose crosses `ENTER_RADII` heading out; the heliocentric scene hands back below `EXIT_RADII`
+  heading in (hysteresis 1%). `CameraRig.continueFrom()` carries pose, goal, easing and any timed glide across, so
+  the camera never stops or kicks; data layers fade out between 40 and 170 radii. Keep `EARTH_MAX_RADII` above
+  ENTER and `EXIT_FLOOR_AU` below EXIT or the hand-over can never trigger.
+- Camera flights: `CameraRig.flyTo()` is an exponential ease (UI hops); `glide()` is a timed ease-in-out in log
+  distance (cinematic journeys: fly-out, dives, the tour). `SolarSystem.flyToBody()` between two bodies runs a
+  transit: the floating origin slides from one body to the other while the camera pulls back and dives.
+- Solar system (`engine/SolarSystem.ts`): separate scene in AU with a floating origin at the focused body. `lib/orbits.ts` has the
+  `lib/orbits.ts` has the ephemerides (JPL planet elements, Meeus Moon, Kepler solver for JPL small-body elements), all unit-tested.
+- Labels for bodies (`components/BodyLabels.tsx`) are one component for both scenes, laid out by `lib/labels.ts`
+  (priority order, four candidate spots, hide when nothing fits). HUD groups fade with `.hud-fade` instead of unmounting.
 - The renderer uses a logarithmic depth buffer: every ShaderMaterial wraps its shaders with `logDepth()`.
 - Satellites: SGP4 in a Web Worker (`engine/workers/sgp4.worker.ts`) every ~2.5 s of sim time; the vertex shader advances
   each one along its orbit in between. `lib/geo.ts#advanceOrbit` mirrors the shader for CPU picking — change both together. Nothing may import

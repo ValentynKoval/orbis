@@ -116,7 +116,7 @@ test.describe("beyond the Earth", () => {
   });
 
   test("lists ISS passes for the view centre", async ({ page }) => {
-    await page.goto("/en/live?at=50.45,30.52,2");
+    await page.goto("/en/live?at=50.45,30.52,3.6");
     await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
     await page.getByRole("button", { name: "Above me" }).click();
     await page.getByRole("button", { name: "Use the view centre" }).click();
@@ -130,4 +130,30 @@ test.describe("beyond the Earth", () => {
     if (isMobile) await page.getByRole("button", { name: "Show layers" }).click();
     await expect(page.getByRole("switch", { name: /Aurora/ })).toContainText(/Kp \d/, { timeout: 60_000 });
   });
+});
+
+test("rain radar is a layer and the sky panel shows the weather", async ({ page, isMobile }) => {
+  await page.goto("/en/live?at=50.45,30.52,3.6");
+  await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
+  if (isMobile) await page.getByRole("button", { name: "Show layers" }).click();
+  const rain = page.getByRole("switch", { name: /Rain radar/ });
+  await expect(rain).toHaveAttribute("aria-checked", "true");
+  await rain.click();
+  await expect(rain).toHaveAttribute("aria-checked", "false");
+  if (isMobile) await page.getByRole("button", { name: "Close layers" }).click();
+  await page.getByRole("button", { name: "Above me" }).click();
+  await page.getByRole("button", { name: "Use the view centre" }).click();
+  await expect(page.getByRole("region", { name: "The sky above you" })).toContainText(/°C/, { timeout: 30_000 });
+});
+
+test("the guided tour starts, captions its stops and stops on Escape", async ({ page }) => {
+  await page.goto("/en/live");
+  await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
+  await page.getByRole("button", { name: "Tour", exact: true }).click();
+  const tour = page.getByRole("region", { name: "Tour" });
+  await expect(tour).toContainText("The Earth, right now");
+  await tour.getByRole("button", { name: "Next" }).click();
+  await expect(tour).not.toContainText("The Earth, right now");
+  await page.keyboard.press("Escape");
+  await expect(tour).toBeHidden();
 });

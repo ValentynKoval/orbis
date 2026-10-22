@@ -1,0 +1,36 @@
+name: Collect ships
+
+# Ships come from the aisstream.io firehose. Holding that socket open in the
+# relay blew through the Durable Objects free tier (every incoming message
+# counts as a request), so a short listen runs here instead: about a minute of
+# the stream every ten minutes, written to a release asset the relay ingests.
+# Vessels keep moving between snapshots by dead reckoning in the browser.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ais
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Listen to the stream
+        env:
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+        run: node scripts/collect-ais.mjs ships.json.gz 100
+      - name: Publish the snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ais ships.json.gz --clobber --repo "$GITHUB_REPOSITORY"

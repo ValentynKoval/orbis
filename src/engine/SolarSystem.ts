@@ -3,13 +3,21 @@ import { gmst } from "@/lib/astro";
 import type { Vec3 } from "@/lib/geo";
 import { latLonToVec } from "@/lib/geo";
 import type { BodyRecord } from "@/lib/feeds/bodies";
+import { trackPosition, type SpacecraftTrack } from "@/lib/feeds/horizons";
 import { AU_KM, EARTH_RADIUS_AU, moonPosition, orbitPath, planetPosition, PLANETS, smallBodyPosition, toScene, type Planet } from "@/lib/orbits";
 import { CameraRig } from "./CameraRig";
 import { makeStars } from "./layers/Planet";
 import { bodyFragment, bodyVertex, logDepth, markerFragment, markerVertex, sunFragment, sunVertex } from "./shaders";
 
+/** The Earth scene hands over to this one at this many Earth radii (and takes back below it). */
+export const HANDOVER_RADII = 400;
+/** Closest the heliocentric camera may come to the Earth: comfortably inside the hand-over, so the pose can cross it. */
+export const EXIT_FLOOR_AU = (HANDOVER_RADII / 1.5) * EARTH_RADIUS_AU;
+
+const sameRef = (a: BodyRef, b: BodyRef) => a.kind === b.kind && (a.kind === "major" ? a.id === (b as { id: MajorBody }).id : a.index === (b as { index: number }).index);
+
 export type MajorBody = "sun" | "moon" | Planet;
-export type BodyRef = { kind: "major"; id: MajorBody } | { kind: "comet"; index: number } | { kind: "asteroid"; index: number };
+export type BodyRef = { kind: "major"; id: MajorBody } | { kind: "comet"; index: number } | { kind: "asteroid"; index: number } | { kind: "craft"; index: number };
 
 export const RADIUS_KM: Record<MajorBody, number> = {
   sun: 695_700,
@@ -35,6 +43,8 @@ export const BODY_COLORS: Record<MajorBody, string> = {
   neptune: "#5f7fe8",
   moon: "#d8d8d8",
 };
+const CRAFT_COLOR = "#ff8ad8";
+
 /** Sidereal rotation periods in hours (negative = retrograde). */
 const SPIN_H: Record<MajorBody, number> = {
   sun: 609.1,
@@ -73,6 +83,9 @@ export class SolarSystem {
   focus: BodyRef = { kind: "major", id: "earth" };
   comets: BodyRecord[] = [];
   asteroids: BodyRecord[] = [];
+  craft: SpacecraftTrack[] = [];
+  private craftPos: Vec3[] = [];
+  private craftPaths = new THREE.Group();
   selected: BodyRef | null = null;
   private meshes = new Map<MajorBody, THREE.Mesh>();
   private materials = new Map<MajorBody, THREE.ShaderMaterial>();
@@ -94,6 +107,12 @@ export class SolarSystem {
   private asteroidPos: Float32Array = new Float32Array(0);
   private focusPos: Vec3 = [0, 0, 0];
   private clockSeconds = 0;
+  /** A flight between bodies: the orbit centre glides from the old body to the new one while the camera pulls back and dives. */
+  private transit: { from: Vec3; start: number; duration: number; dive: number; final: number; dived: boolean } | null = null;
+  /** Screen positions of the major bodies this frame (px), for labels and overlap checks. */
+  private screen = new Map<MajorBody, { x: number; y: number; px: number }>();
+  /** The Moon sits on top of the Earth from afar: its marker and label hide until they separate. */
+  private moonHidden = false;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -101,8 +120,8 @@ export class SolarSystem {
   ) {
     this.rig = new CameraRig(this.camera, canvas);
     this.rig.radius = 0;
-    this.rig.minDist = 70 * EARTH_RADIUS_AU;
-    this.rig.maxDist = 90;
+    this.rig.minDist = HANDOVER_RADII * EARTH_RADIUS_AU;
+    this.rig.maxDist = 220;
     this.rig.pose.dist = this.rig.goal.dist = 0.01;
 
     this.sunMaterial = new THREE.ShaderMaterial({
@@ -164,7 +183,7 @@ export class SolarSystem {
     this.asteroidPoints.renderOrder = 7;
     this.scene.add(this.asteroidPoints);
 
-    this.scene.add(this.orbits, this.cometOrbits);
+    this.scene.add(this.orbits, this.cometOrbits, this.craftPaths);
     this.stars = makeStars(5200, 900);
     this.scene.add(this.stars);
     this.buildPlanetOrbits(Date.now());
@@ -235,6 +254,21 @@ export class SolarSystem {
     }
   }
 
+  setCraft(craft: SpacecraftTrack[]) {
+    this.craft = craft;
+    this.craftPaths.clear();
+    for (const c of craft) {
+      const points: THREE.Vector3[] = [];
+      for (let i = 0; i + 2 < c.xyz.length; i += 3) points.push(new THREE.Vector3(...toScene([c.xyz[i], c.xyz[i + 1], c.xyz[i + 2]])));
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(points),
+        new THREE.LineBasicMaterial({ color: CRAFT_COLOR, transparent: true, opacity: 0.35, depthWrite: false }),
+      );
+      line.frustumCulled = false;
+      this.craftPaths.add(line);
+    }
+  }
+
   private buildPlanetOrbits(ms: number) {
     this.orbits.clear();
     for (const p of PLANETS) {
@@ -272,35 +306,79 @@ export class SolarSystem {
       }
       return toScene(planetPosition(ref.id, ms));
     }
+    if (ref.kind === "craft") {
+      const c = this.craft[ref.index];
+      const p = c && trackPosition(c, ms);
+      return p ? toScene(p) : null;
+    }
     const rec = ref.kind === "comet" ? this.comets[ref.index] : this.asteroids[ref.index];
     const p = rec && smallBodyPosition(rec.el, ms);
     return p ? toScene(p) : null;
   }
 
+  /** Speed of a probe along its track, km/s. */
+  craftSpeed(index: number, ms: number): number | null {
+    const c = this.craft[index];
+    if (!c) return null;
+    const a = trackPosition(c, ms - 43_200_000);
+    const b = trackPosition(c, ms + 43_200_000);
+    if (!a || !b) return null;
+    return (Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) * AU_KM) / 86_400;
+  }
+
   radiusAu(ref: BodyRef): number {
     if (ref.kind === "major") return RADIUS_KM[ref.id] / AU_KM;
+    if (ref.kind === "craft") return 1e-7;
     const rec = ref.kind === "comet" ? this.comets[ref.index] : this.asteroids[ref.index];
     return Math.max(1, rec?.diameterKm ?? 2) / 2 / AU_KM;
   }
 
   name(ref: BodyRef): string {
     if (ref.kind === "major") return ref.id;
+    if (ref.kind === "craft") return this.craft[ref.index]?.name ?? "";
     return (ref.kind === "comet" ? this.comets[ref.index] : this.asteroids[ref.index])?.name ?? "";
   }
 
   setFocus(ref: BodyRef, ms: number) {
     this.focus = ref;
     const r = this.radiusAu(ref);
-    this.rig.minDist = ref.kind === "major" && ref.id === "earth" ? 70 * EARTH_RADIUS_AU : Math.max(r * 2.6, 1e-5);
+    this.rig.minDist = ref.kind === "major" && ref.id === "earth" ? EXIT_FLOOR_AU : ref.kind === "craft" ? 0.002 : Math.max(r * 2.6, 1e-5);
     if (this.rig.goal.dist < this.rig.minDist) this.rig.flyTo({ dist: Math.max(this.rig.minDist, r * 8) }, 1.2);
     void ms;
   }
 
-  /** Flies toward a body and makes it the orbit centre. */
-  flyToBody(ref: BodyRef, ms: number) {
+  get inTransit() {
+    return this.transit !== null;
+  }
+
+  /**
+   * Flies to a body and makes it the orbit centre. Between two bodies the
+   * centre glides from one to the other while the camera pulls back far
+   * enough to see the way, then dives; `finalDist` overrides the arrival distance.
+   */
+  flyToBody(ref: BodyRef, ms: number, finalDist?: number) {
     const r = this.radiusAu(ref);
+    const from = this.transit ? this.focusPos : (this.heliocentric(this.focus, ms) ?? this.focusPos);
+    const to = this.heliocentric(ref, ms) ?? from;
+    const same = sameRef(this.focus, ref) && !this.transit;
     this.setFocus(ref, ms);
-    this.rig.flyTo({ dist: Math.max(this.rig.minDist, r * 9) }, 2.2);
+    // An explicit arrival distance may sit below the usual floor (the way back to the Earth dives through the hand-over).
+    if (finalDist !== undefined) this.rig.minDist = Math.min(this.rig.minDist, finalDist);
+    const final = Math.max(this.rig.minDist, finalDist ?? r * 9);
+    if (same) {
+      // A long zoom on the same body is a steady timed flight; a short hop just eases.
+      const ratio = Math.abs(Math.log10(final / this.rig.pose.dist));
+      if (ratio > 1.3) this.rig.glide({ dist: final }, 2 + ratio * 0.9);
+      else this.rig.flyTo({ dist: final }, 2.2);
+      return;
+    }
+    const gap = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+    const duration = THREE.MathUtils.clamp(2.8 + Math.log10(1 + gap) * 1.6, 3, 6.5);
+    // Arriving at the Earth, stay outside the hand-over until the centre has settled; the dive continues in the Earth scene.
+    const earth = ref.kind === "major" && ref.id === "earth";
+    const dive = earth ? Math.max(final, HANDOVER_RADII * 1.25 * EARTH_RADIUS_AU) : final;
+    this.transit = { from, start: this.clockSeconds, duration, dive, final, dived: false };
+    this.rig.glide({ dist: Math.max(this.rig.pose.dist, gap * 0.45) }, duration * 0.5);
   }
 
   update(simMs: number, dt: number, width: number, height: number) {
@@ -323,8 +401,35 @@ export class SolarSystem {
       this.asteroidPos[i * 3 + 1] = s[1];
       this.asteroidPos[i * 3 + 2] = s[2];
     }
-    const f = this.heliocentric(this.focus, simMs) ?? [0, 0, 0];
+    this.craftPos = this.craft.map((c) => {
+      const p = trackPosition(c, simMs);
+      return p ? toScene(p) : [1e6, 1e6, 1e6];
+    });
+    let f = this.heliocentric(this.focus, simMs) ?? [0, 0, 0];
+    if (this.transit) {
+      const tr = this.transit;
+      const t = Math.min(1, (this.clockSeconds - tr.start) / tr.duration);
+      const e = t * t * t * (t * (t * 6 - 15) + 10);
+      f = [tr.from[0] + (f[0] - tr.from[0]) * e, tr.from[1] + (f[1] - tr.from[1]) * e, tr.from[2] + (f[2] - tr.from[2]) * e];
+      if (!tr.dived && t > 0.45) {
+        tr.dived = true;
+        this.rig.glide({ dist: tr.dive }, tr.duration * 0.55);
+      }
+      if (t >= 1) {
+        this.transit = null;
+        // The last leg (through the hand-over, when heading home) is a steady dive.
+        if (tr.final < this.rig.goal.dist) this.rig.glide({ dist: tr.final }, 3.5);
+      }
+    }
     this.focusPos = f;
+    this.rig.update(dt, width, height);
+    const near = Math.max(1e-7, this.rig.pose.dist * 0.002);
+    if (Math.abs(near - this.camera.near) / this.camera.near > 0.2) {
+      this.camera.near = near;
+      this.camera.updateProjectionMatrix();
+    }
+    this.camera.updateMatrixWorld();
+    this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
 
     // Place everything relative to the focus.
     const rel = (p: Vec3): [number, number, number] => [p[0] - f[0], p[1] - f[1], p[2] - f[2]];
@@ -344,11 +449,12 @@ export class SolarSystem {
     if (this.ring) this.ring.position.copy(this.meshes.get("saturn")!.position);
     this.orbits.position.set(...rel([0, 0, 0]));
     this.cometOrbits.position.copy(this.orbits.position);
+    this.craftPaths.position.copy(this.orbits.position);
     this.moonOrbit?.position.set(...rel(earth));
     this.stars.position.set(0, 0, 0);
 
     // Markers for major bodies and comets.
-    const n = MAJOR.length + this.comets.length;
+    const n = MAJOR.length + this.comets.length + this.craft.length;
     let mp = this.markerGeometry.getAttribute("position") as THREE.BufferAttribute | undefined;
     if (!mp || mp.count !== n) {
       this.markerGeometry.setAttribute("position", (mp = new THREE.BufferAttribute(new Float32Array(n * 3), 3)));
@@ -359,14 +465,27 @@ export class SolarSystem {
     const msz = this.markerGeometry.getAttribute("aSize") as THREE.BufferAttribute;
     const cometColor = new THREE.Color("#7ee7e1");
     const gold = new THREE.Color("#f2c14e");
+    const fovScale = height / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2));
+    const v = new THREE.Vector3();
+    this.screen.clear();
     MAJOR.forEach((id, i) => {
       const p = rel(this.pos.get(id)!);
       mp.setXYZ(i, p[0], p[1], p[2]);
       const sel = this.selected?.kind === "major" && this.selected.id === id;
       const c = sel ? gold : new THREE.Color(BODY_COLORS[id]);
       mc.setXYZ(i, c.r, c.g, c.b);
-      msz.setX(i, id === "sun" ? 0 : sel ? 9 : id === "moon" ? 3 : 4.5);
+      // A marker only stands in for a body that is too small to see; it fades as the disc grows.
+      const dist = Math.hypot(p[0] - this.camera.position.x, p[1] - this.camera.position.y, p[2] - this.camera.position.z);
+      const px = ((RADIUS_KM[id] / AU_KM) / dist) * fovScale;
+      v.set(p[0], p[1], p[2]).project(this.camera);
+      if (v.z < 1) this.screen.set(id, { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * height, px });
+      const disc = 1 - THREE.MathUtils.smoothstep(px, 2.5, 6);
+      msz.setX(i, id === "sun" ? 0 : (sel ? 9 : id === "moon" ? 3 : 4.5) * disc);
     });
+    const e = this.screen.get("earth");
+    const m = this.screen.get("moon");
+    this.moonHidden = !!e && !!m && Math.hypot(e.x - m.x, e.y - m.y) < 9 && !(this.focus.kind === "major" && this.focus.id === "moon");
+    if (this.moonHidden) msz.setX(MAJOR.indexOf("moon"), 0);
     this.cometPos.forEach((p, i) => {
       const r = rel(p);
       const k = MAJOR.length + i;
@@ -375,6 +494,16 @@ export class SolarSystem {
       const c = sel ? gold : cometColor;
       mc.setXYZ(k, c.r, c.g, c.b);
       msz.setX(k, sel ? 9 : 4);
+    });
+    const craftColor = new THREE.Color(CRAFT_COLOR);
+    this.craftPos.forEach((p, i) => {
+      const r = rel(p);
+      const k = MAJOR.length + this.comets.length + i;
+      mp.setXYZ(k, r[0], r[1], r[2]);
+      const sel = this.selected?.kind === "craft" && this.selected.index === i;
+      const c = sel ? gold : craftColor;
+      mc.setXYZ(k, c.r, c.g, c.b);
+      msz.setX(k, sel ? 9 : 4.5);
     });
     mp.needsUpdate = mc.needsUpdate = msz.needsUpdate = true;
     const ap = this.asteroidGeometry.getAttribute("position") as THREE.BufferAttribute | undefined;
@@ -388,15 +517,9 @@ export class SolarSystem {
     const far = THREE.MathUtils.smoothstep(d, 0.015, 0.25);
     this.orbits.visible = far > 0.01;
     this.cometOrbits.visible = far > 0.01;
-    for (const g of [this.orbits, this.cometOrbits]) for (const line of g.children) ((line as THREE.Line).material as THREE.LineBasicMaterial).opacity = ((line as THREE.Line).userData.baseOpacity ??= ((line as THREE.Line).material as THREE.LineBasicMaterial).opacity) * far;
+    this.craftPaths.visible = far > 0.01;
+    for (const g of [this.orbits, this.cometOrbits, this.craftPaths]) for (const line of g.children) ((line as THREE.Line).material as THREE.LineBasicMaterial).opacity = ((line as THREE.Line).userData.baseOpacity ??= ((line as THREE.Line).material as THREE.LineBasicMaterial).opacity) * far;
     if (this.moonOrbit) this.moonOrbit.visible = d > 0.0012 && d < 0.3 && this.focus.kind === "major" && (this.focus.id === "earth" || this.focus.id === "moon");
-
-    this.rig.update(dt, width, height);
-    const near = Math.max(1e-7, this.rig.pose.dist * 0.002);
-    if (Math.abs(near - this.camera.near) / this.camera.near > 0.2) {
-      this.camera.near = near;
-      this.camera.updateProjectionMatrix();
-    }
   }
 
   // ---------------------------------------------------------------- selection
@@ -408,7 +531,10 @@ export class SolarSystem {
       this.selectedOrbit.geometry.dispose();
       this.selectedOrbit = null;
     }
-    if (ref && ref.kind !== "major") {
+    this.craftPaths.children.forEach((line, i) => {
+      ((line as THREE.Line).material as THREE.LineBasicMaterial).color.set(ref?.kind === "craft" && ref.index === i ? "#f2c14e" : CRAFT_COLOR);
+    });
+    if (ref && ref.kind !== "major" && ref.kind !== "craft") {
       const rec = ref.kind === "comet" ? this.comets[ref.index] : this.asteroids[ref.index];
       const points = orbitPath(rec.el, 360, 80).map((p) => new THREE.Vector3(...toScene(p)));
       if (points.length > 1) {
@@ -439,6 +565,7 @@ export class SolarSystem {
     };
     for (const id of MAJOR) test(this.pos.get(id)!, { kind: "major", id }, id === "sun" ? 10 : 3);
     this.cometPos.forEach((p, index) => test(p, { kind: "comet", index }, 2));
+    this.craftPos.forEach((p, index) => test(p, { kind: "craft", index }, 3));
     for (let index = 0; index < this.asteroids.length; index++) {
       test([this.asteroidPos[index * 3], this.asteroidPos[index * 3 + 1], this.asteroidPos[index * 3 + 2]], { kind: "asteroid", index });
     }
@@ -466,8 +593,9 @@ export class SolarSystem {
         distanceAu: Math.hypot(p[0] - earth[0], p[1] - earth[1], p[2] - earth[2]),
       });
     };
-    for (const id of MAJOR) add(this.pos.get(id)!, { kind: "major", id }, id, RADIUS_KM[id] / AU_KM);
+    for (const id of MAJOR) if (!(id === "moon" && this.moonHidden)) add(this.pos.get(id)!, { kind: "major", id }, id, RADIUS_KM[id] / AU_KM);
     this.cometPos.forEach((p, index) => add(p, { kind: "comet", index }, this.comets[index].name, 1e-6));
+    this.craftPos.forEach((p, index) => add(p, { kind: "craft", index }, this.craft[index].name, 1e-7));
     if (this.selected?.kind === "asteroid") {
       const i = this.selected.index;
       add([this.asteroidPos[i * 3], this.asteroidPos[i * 3 + 1], this.asteroidPos[i * 3 + 2]], this.selected, this.asteroids[i].name, 1e-6);

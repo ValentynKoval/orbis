@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { notFound } from "next/navigation";
+import { preload } from "react-dom";
 import { Geologica, Unbounded } from "next/font/google";
 import { dictionaries, isLocale, locales } from "@/i18n/config";
 import { LocaleProvider } from "@/i18n/client";
@@ -47,6 +48,12 @@ export async function generateMetadata({ params }: LayoutProps<"/[locale]">): Pr
 export default async function LocaleLayout({ children, params }: LayoutProps<"/[locale]">) {
   const { locale } = await params;
   if (!isLocale(locale)) notFound();
+  // The globe's first-paint maps start downloading with the HTML.
+  const month = String(new Date().getUTCMonth() + 1).padStart(2, "0");
+  // three.js loads images with crossOrigin "anonymous"; the preload must match or the browser fetches them twice.
+  preload(`/textures/day-${month}-1k.jpg`, { as: "image", fetchPriority: "high", crossOrigin: "anonymous" });
+  preload("/textures/night-1k.jpg", { as: "image", crossOrigin: "anonymous" });
+  preload("/textures/water-2k.png", { as: "image", crossOrigin: "anonymous" });
   return (
     <html lang={locale} className={`${unbounded.variable} ${geologica.variable} antialiased`}>
       <body>

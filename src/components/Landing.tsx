@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useDict, useLocale } from "@/i18n/client";
@@ -76,6 +76,7 @@ export function Landing() {
   const locale = useLocale();
   const engine = useOrbis((s) => s.engine);
   const ready = useOrbis((s) => s.ready);
+  const webglError = useOrbis((s) => s.webglError);
   const feeds = useOrbis((s) => s.feeds);
   const iss = useOrbis((s) => s.iss);
   const quakes = useOrbis((s) => s.quakes);
@@ -115,7 +116,9 @@ export function Landing() {
   }, [engine]);
 
   // One orchestrated entrance: the Earth swings in from deep space as the title rises.
-  useEffect(() => {
+  // The copy is held hidden by CSS until the globe is ready (see globals.css), so both arrive together;
+  // a layout effect sets the animation's first frame before that CSS hold is released.
+  useLayoutEffect(() => {
     if (!ready || !root.current) return;
     const ctx = gsap.context(() => {
       const mm = gsap.matchMedia();
@@ -128,8 +131,8 @@ export function Landing() {
         }
         gsap
           .timeline({ defaults: { ease: "expo.out" } })
-          .from("[data-rise]", { yPercent: 115, duration: 1.6, stagger: 0.08 }, 0.35)
-          .from("[data-fade]", { opacity: 0, y: 18, filter: "blur(8px)", duration: 1.4, stagger: 0.12 }, 0.8);
+          .fromTo("[data-rise]", { yPercent: 115 }, { yPercent: 0, duration: 1.6, stagger: 0.08 }, 0.35)
+          .fromTo("[data-fade]", { opacity: 0, y: 18, filter: "blur(8px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 1.4, stagger: 0.12 }, 0.8);
         gsap.utils.toArray<HTMLElement>("[data-copy]").forEach((el) => {
           gsap.from(el, {
             opacity: 0,
@@ -162,7 +165,7 @@ export function Landing() {
   const fastest = planeSnap && fastestIndex >= 0 ? engine?.traffic.planeInfo(planeSnap.ids[fastestIndex], now / 1000) : null;
 
   return (
-    <div ref={root} className="relative z-10">
+    <div ref={root} data-entrance={ready || webglError ? "done" : "pending"} className="relative z-10">
       <TopBar />
       {/* Scrim that keeps copy legible over the globe; it sits on the copy side only. */}
       <div

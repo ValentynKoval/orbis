@@ -12,9 +12,12 @@ import { Analyst } from "./Analyst";
 import { Search } from "./Search";
 import { Timeline } from "./Timeline";
 import { SystemHud } from "./SystemHud";
+import { BodyLabels } from "./BodyLabels";
 import { Sky } from "./Sky";
 import { Share } from "./Share";
-import { Orbit } from "./icons";
+import { Perf } from "./Perf";
+import { Orbit, Play } from "./icons";
+import { Tour } from "./Tour";
 import { TopBar } from "./TopBar";
 
 const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
@@ -24,6 +27,7 @@ const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
   { key: "quakes", feed: "quakes", swatch: "bg-seismic" },
   { key: "fires", feed: "fires", swatch: "bg-ember" },
   { key: "aurora", feed: "aurora", swatch: "bg-[#5cf27a]" },
+  { key: "rain", feed: "rain", swatch: "bg-[#4aa3ff]" },
   { key: "clouds", feed: "clouds", swatch: "bg-cloud" },
   { key: "lights", swatch: "bg-glow" },
   { key: "borders", swatch: "bg-foil" },
@@ -33,6 +37,8 @@ export function LiveHud() {
   const engine = useOrbis((s) => s.engine);
   const selection = useOrbis((s) => s.selection);
   const space = useOrbis((s) => s.space);
+  const tour = useOrbis((s) => s.tour);
+  const setTour = useOrbis((s) => s.setTour);
   const [panelOpen, setPanelOpen] = useState(false);
   const t = useDict();
 
@@ -63,7 +69,11 @@ export function LiveHud() {
     } else if (at && at.length >= 2 && at.every(Number.isFinite)) engine.rig.flyTo({ lat: at[0], lon: at[1], dist: at[2] || 2.4 }, 2);
     else engine.rig.flyTo({ dist: Math.min(Math.max(engine.rig.goal.dist, 3.4), 5.2) }, 1.4);
     if (Number.isFinite(t0) && t0 > 0) engine.setTime(t0, 0);
-    return () => engine.setInteractive(false);
+    if (params.get("tour") === "1") useOrbis.getState().setTour(true);
+    return () => {
+      engine.setInteractive(false);
+      useOrbis.getState().setTour(false);
+    };
   }, [engine]);
 
   useEffect(() => {
@@ -78,13 +88,28 @@ export function LiveHud() {
     <div className="pointer-events-none fixed inset-0 z-10">
       <TopBar live />
       <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 max-sm:top-[calc(max(1rem,env(safe-area-inset-top))+4rem)]">
-        {space === "earth" && <Analyst />}
-        {space === "earth" && <Sky />}
-        {space === "earth" && <Search />}
+        <Fade shown={space === "earth"} layer={false} className="flex items-center gap-2">
+          <Analyst />
+          <Sky />
+          <Search />
+        </Fade>
+        <button
+          type="button"
+          onClick={() => setTour(!tour)}
+          aria-pressed={tour}
+          className="bezel pointer-events-auto rounded-full p-1"
+          aria-label={tour ? t.tour.stop : t.tour.open}
+          title={tour ? t.tour.stop : t.tour.open}
+        >
+          <span className={`bezel-core flex items-center gap-2 rounded-full px-3.5 py-2.5 text-sm ${tour ? "text-foil" : "text-lunar"}`}>
+            <Play className="size-4" />
+            <span className="hidden 2xl:inline">{t.tour.open}</span>
+          </span>
+        </button>
         <Share />
         <button
           type="button"
-          onClick={() => (space === "earth" ? engine?.enterSystem(true) : engine?.returnToEarth())}
+          onClick={() => (space === "earth" ? engine?.goToSystem() : engine?.returnToEarth())}
           className="bezel pointer-events-auto rounded-full p-1"
           aria-label={space === "earth" ? t.system.open : t.system.backToEarth}
         >
@@ -94,11 +119,15 @@ export function LiveHud() {
           </span>
         </button>
       </div>
-      {space === "system" && <SystemHud />}
+      <Fade shown={space === "system"}>
+        <SystemHud />
+      </Fade>
+      <BodyLabels />
+      <Tour />
       <h1 className="sr-only">{t.nav.live}</h1>
 
       {/* Layers: a side panel on wide screens, a sheet behind a button on phones. */}
-      {space === "earth" && (
+      <Fade shown={space === "earth"}>
       <div className="absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] left-4 flex flex-col items-start gap-3 md:top-24 md:bottom-auto">
         <button
           type="button"
@@ -116,12 +145,11 @@ export function LiveHud() {
           <LayerPanel />
         </div>
       </div>
-      )}
-
-      {space === "earth" && selection && <ObjectCard key={cardKey(selection)} selection={selection} />}
-
-      {space === "earth" && <Timeline />}
-      {space === "earth" && <Footnote />}
+      {selection && <ObjectCard key={cardKey(selection)} selection={selection} />}
+      <Timeline />
+      <Footnote />
+      </Fade>
+      <Perf />
     </div>
   );
 }
@@ -189,7 +217,9 @@ function LayerPanel() {
                 ? t.hud.status.error
                 : state?.status === "loading" || state?.status === "idle"
                   ? t.hud.status.loading
-                  : key === "aurora"
+                  : key === "rain"
+                    ? ""
+                    : key === "aurora"
                     ? kp === null
                       ? ""
                       : `Kp ${formatNumber(kp, locale, 1)}`
@@ -403,6 +433,20 @@ function Footnote() {
     <div className="absolute right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] hidden max-w-[19rem] flex-col items-end gap-1 text-right text-[11px] leading-snug text-dim xl:flex">
       <p>{t.hud.hint}</p>
       <p>{cloudsDate ? fill(t.hud.clouds, { date: formatDate(cloudsDate, locale) }) : t.hud.cloudsArchive}</p>
+    </div>
+  );
+}
+
+/**
+ * HUD groups fade and settle instead of popping when the scene hands over.
+ * Hidden groups also leave the tab order and the accessibility tree. By
+ * default the wrapper covers the viewport, so absolutely placed children
+ * keep their positions whether or not it is transformed.
+ */
+function Fade({ shown, layer = true, className = "", children }: { shown: boolean; layer?: boolean; className?: string; children: React.ReactNode }) {
+  return (
+    <div data-shown={shown} inert={!shown || undefined} className={`hud-fade ${layer ? "pointer-events-none absolute inset-0" : ""} ${className}`}>
+      {children}
     </div>
   );
 }

@@ -44,6 +44,8 @@ async function dayTextures() {
     );
     await sharp(src).resize(4096, 2048).jpeg({ quality: 84, mozjpeg: true }).toFile(path.join(TEX, `day-${mm}-4k.jpg`));
     await sharp(src).resize(2048, 1024).jpeg({ quality: 84, mozjpeg: true }).toFile(path.join(TEX, `day-${mm}-2k.jpg`));
+    // First paint: the globe appears with this and swaps to the full-size map once it arrives.
+    await sharp(src).resize(1024, 512).jpeg({ quality: 80, mozjpeg: true }).toFile(path.join(TEX, `day-${mm}-1k.jpg`));
   }
 }
 
@@ -53,6 +55,7 @@ async function nightTextures() {
   for (const [w, h, tag] of [
     [4096, 2048, "4k"],
     [2048, 1024, "2k"],
+    [1024, 512, "1k"],
   ]) {
     await sharp(src)
       .resize(w, h)

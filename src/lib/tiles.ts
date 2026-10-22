@@ -71,6 +71,17 @@ export function esriImagery(apiKey: string): ImageryProvider {
   };
 }
 
+/** RainViewer radar composite for one frame; the path changes every 10 minutes. */
+export function rainRadar(host: string, path: string): ImageryProvider {
+  return {
+    id: "rainviewer",
+    minLevel: 3,
+    maxLevel: 7,
+    attribution: "Weather radar: RainViewer",
+    url: (z, x, y) => `${host}${path}/256/${z}/${x}/${y}/2/1_1.png`,
+  };
+}
+
 export function providerFor(providers: ImageryProvider[], z: number): ImageryProvider | null {
   return providers.find((p) => z >= p.minLevel && z <= p.maxLevel) ?? null;
 }

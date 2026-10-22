@@ -97,6 +97,14 @@ export function Wave({ className, on }: IconProps & { on: boolean }) {
 }
 
 /** The solar system: a sun with one orbit. */
+export function Play({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M8 5.5v13l10-6.5-10-6.5Z" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function Orbit({ className }: IconProps) {
   return (
     <svg {...base} className={className}>

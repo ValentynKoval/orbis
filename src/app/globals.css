@@ -72,6 +72,28 @@
   .readout {
     font-variant-numeric: tabular-nums;
   }
+
+  /* Scene hand-over: HUD groups drift away and back; hidden ones become invisible to pointers and readers. */
+  .hud-fade {
+    transition:
+      opacity 0.7s var(--ease-orbit),
+      transform 0.7s var(--ease-orbit),
+      visibility 0s linear 0s;
+  }
+  .hud-fade[data-shown="false"] {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(10px);
+    transition-delay: 0s, 0s, 0.7s;
+  }
+
+  /* Landing entrance: copy stays hidden until the Earth is ready, then both arrive together. */
+  [data-entrance="pending"] [data-rise] {
+    transform: translateY(115%);
+  }
+  [data-entrance="pending"] [data-fade] {
+    opacity: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

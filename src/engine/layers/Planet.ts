@@ -75,7 +75,7 @@ export class Planet {
       transparent: true,
       depthWrite: false,
     });
-    this.stars = new THREE.Points(makeStarsGeometry(5200, 90), this.starsMaterial);
+    this.stars = new THREE.Points(makeStarsGeometry(5200, 3000), this.starsMaterial);
     this.stars.renderOrder = -1;
     this.stars.frustumCulled = false;
   }

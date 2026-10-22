@@ -2,9 +2,9 @@ import type { Quake } from "@/lib/feeds/quakes";
 import type { SatGroup } from "@/lib/feeds/satellites";
 import type { Pass } from "@/lib/passes";
 
-export type LayerKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "aurora" | "clouds" | "lights" | "borders";
+export type LayerKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "aurora" | "rain" | "clouds" | "lights" | "borders";
 
-export type FeedKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "clouds" | "aurora";
+export type FeedKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "clouds" | "aurora" | "rain";
 export type FeedState = { status: "idle" | "loading" | "ready" | "error"; count: number; updated: number | null };
 
 export type Selection =

@@ -10,6 +10,26 @@ import type { Overhead } from "@/engine/Engine";
 import { Close, Compass, Target } from "./icons";
 import { useNow } from "./hooks";
 
+interface Weather {
+  temperature: number;
+  wind: number;
+  windDir: number;
+  clouds: number;
+  /** WMO weather code bucket: clear, cloudy, fog, rain, snow, storm. */
+  code: "clear" | "cloudy" | "fog" | "rain" | "snow" | "storm";
+}
+
+/** Open-Meteo, free and keyless, straight from the browser. */
+async function fetchWeather(lat: number, lon: number): Promise<Weather> {
+  const q = new URLSearchParams({ latitude: lat.toFixed(3), longitude: lon.toFixed(3), current: "temperature_2m,wind_speed_10m,wind_direction_10m,weather_code,cloud_cover" });
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${q}`);
+  if (!res.ok) throw new Error(`weather ${res.status}`);
+  const c = ((await res.json()) as { current: Record<string, number> }).current;
+  const w = c.weather_code;
+  const code: Weather["code"] = w >= 95 ? "storm" : w >= 71 && w <= 77 ? "snow" : w === 85 || w === 86 ? "snow" : (w >= 51 && w <= 67) || w >= 80 ? "rain" : w === 45 || w === 48 ? "fog" : w >= 1 ? "cloudy" : "clear";
+  return { temperature: Math.round(c.temperature_2m), wind: Math.round(c.wind_speed_10m), windDir: c.wind_direction_10m, clouds: Math.round(c.cloud_cover), code };
+}
+
 /** "The sky above me": ISS passes for a place and what is overhead right now. */
 export function Sky() {
   const t = useDict();
@@ -22,9 +42,21 @@ export function Sky() {
   const [denied, setDenied] = useState(false);
   const [passes, setPasses] = useState<{ place: string; list: Pass[] } | null>(null);
   const [overhead, setOverhead] = useState<Overhead | null>(null);
+  const [weather, setWeather] = useState<Weather | null>(null);
   const now = useNow(1000);
   const place = observer ? `${observer.lat.toFixed(4)},${observer.lon.toFixed(4)}` : "";
   const currentPasses = passes?.place === place ? passes.list : null;
+
+  useEffect(() => {
+    if (!open || !observer) return;
+    let alive = true;
+    fetchWeather(observer.lat, observer.lon)
+      .then((w) => alive && setWeather(w))
+      .catch(() => alive && setWeather(null));
+    return () => {
+      alive = false;
+    };
+  }, [open, observer]);
 
   useEffect(() => {
     if (!open || !observer || !engine) return;
@@ -122,6 +154,12 @@ export function Sky() {
 
             {observer && (
               <>
+                {weather && (
+                  <p className="readout mt-3 text-sm text-lunar">
+                    {formatNumber(weather.temperature, locale)}°C, {t.sky.weather[weather.code] ?? t.sky.weather.unknown},{" "}
+                    {fill(t.sky.wind, { speed: formatNumber(weather.wind, locale), dir: compass(weather.windDir) })}, {fill(t.sky.cloudCover, { pct: String(weather.clouds) })}
+                  </p>
+                )}
                 <h3 className="mt-5 text-xs text-haze">{t.sky.issPasses}</h3>
                 {!currentPasses && <p className="mt-2 text-sm text-dim">{t.sky.computing}</p>}
                 {currentPasses && !upcoming.length && <p className="mt-2 text-sm text-dim">{t.sky.noPasses}</p>}

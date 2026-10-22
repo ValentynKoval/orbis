@@ -6,6 +6,7 @@ import { fill } from "@/i18n/config";
 import { formatNumber, formatUtc } from "@/lib/format";
 import { AU_KM } from "@/lib/orbits";
 import type { CloseApproach } from "@/lib/feeds/bodies";
+import type { SolarWind } from "@/lib/feeds/sun";
 import { useOrbis } from "@/store/orbis";
 import { BODY_COLORS, MAJOR, RADIUS_KM, type BodyRef, type MajorBody } from "@/engine/SolarSystem";
 import { Close, Target } from "./icons";
@@ -37,7 +38,6 @@ export function SystemHud() {
   const t = useDict();
   const locale = useLocale();
   const engine = useOrbis((s) => s.engine);
-  const labels = useOrbis((s) => s.systemLabels);
   const selected = useOrbis((s) => s.selectedBody);
   const focus = useOrbis((s) => s.focusBody);
   const selectBody = useOrbis((s) => s.selectBody);
@@ -54,35 +54,9 @@ export function SystemHud() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectBody]);
 
-  const bodyName = (ref: BodyRef) => (ref.kind === "major" ? t.bodies[ref.id] : (engine?.system.name(ref) ?? ""));
 
   return (
     <>
-      {/* Labels follow the bodies; the focused one is quiet, the selected one gold. */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-        {labels.map((l) => {
-          const key = l.ref.kind === "major" ? l.ref.id : `${l.ref.kind}-${l.ref.index}`;
-          const isSel = sameRef(l.ref, selected);
-          const isFocus = sameRef(l.ref, focus);
-          const comet = l.ref.kind === "comet";
-          const color = l.ref.kind === "major" ? BODY_COLORS[l.ref.id] : isSel ? "#f2c14e" : "#7ee7e1";
-          const offset = Math.max(8, l.px + 6);
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => selectBody(l.ref)}
-              onDoubleClick={() => focusOn(l.ref)}
-              className={`pointer-events-auto absolute -translate-y-1/2 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[11px] transition-opacity duration-500 ${isSel ? "text-foil" : comet ? "text-aurora/80" : "text-lunar/85"} ${isFocus && l.px > 60 ? "opacity-0" : "opacity-100"}`}
-              style={{ left: l.x + offset, top: l.y, textShadow: "0 1px 6px rgb(0 0 0 / 0.9)" }}
-            >
-              <span className="mr-1.5 inline-block size-1 rounded-full align-middle" style={{ background: color }} />
-              {bodyName(l.ref)}
-            </button>
-          );
-        })}
-      </div>
-
       {/* Bodies list */}
       <section aria-label={t.system.title} className="bezel pointer-events-auto absolute top-24 left-4 hidden w-[17rem] md:block">
         <div className="bezel-core p-2">
@@ -117,6 +91,22 @@ export function SystemHud() {
           </div>
         </div>
       </section>
+
+      {/* Phones: the bodies list is a select. */}
+      <label className="bezel pointer-events-auto absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+4.5rem)] left-4 rounded-full p-1 md:hidden">
+        <span className="sr-only">{t.system.title}</span>
+        <select
+          value={focus.kind === "major" ? focus.id : ""}
+          onChange={(ev) => ev.target.value && focusOn({ kind: "major", id: ev.target.value as MajorBody })}
+          className="bezel-core appearance-none rounded-full bg-transparent px-4 py-2.5 text-sm text-lunar"
+        >
+          {MAJOR.map((id) => (
+            <option key={id} value={id} className="bg-black">
+              {t.bodies[id]}
+            </option>
+          ))}
+        </select>
+      </label>
 
       {selected && <BodyCard selection={selected} />}
 
@@ -195,9 +185,19 @@ function BodyCard({ selection }: { selection: BodyRef }) {
   const focusOn = useOrbis((s) => s.focusOn);
   const now = useNow(1000);
   const [approaches, setApproaches] = useState<CloseApproach[] | null>(null);
+  const [sun, setSun] = useState<{ wind: SolarWind | null; image: { url: string; at: number | null } | null } | null>(null);
   const sim = engine?.clock.now() ?? now;
   const sys = engine?.system;
   const isEarth = selection.kind === "major" && selection.id === "earth";
+  const isSun = selection.kind === "major" && selection.id === "sun";
+
+  useEffect(() => {
+    if (!isSun || sun) return;
+    fetch("/api/sun")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { wind: SolarWind | null; image: { url: string; at: number | null } | null } | null) => d && setSun(d))
+      .catch(() => setSun({ wind: null, image: null }));
+  }, [isSun, sun]);
 
   useEffect(() => {
     if (!isEarth || approaches) return;
@@ -218,7 +218,12 @@ function BodyCard({ selection }: { selection: BodyRef }) {
   if (!(selection.kind === "major" && selection.id === "sun")) rows.push([t.system.fromSun, distance(fromSun, locale, t)]);
   if (!isEarth) rows.push([t.system.fromEarth, distance(fromEarth, locale, t)], [t.system.lightTime, lightTime(fromEarth, t, locale)]);
   if (selection.kind === "major") rows.push([t.system.diameter, `${formatNumber(RADIUS_KM[selection.id] * 2, locale)} ${t.units.km}`]);
-  else {
+  else if (selection.kind === "craft") {
+    const c = sys.craft[selection.index];
+    const speed = sys.craftSpeed(selection.index, sim);
+    if (c) rows.push([t.system.launched, c.launched]);
+    if (speed !== null) rows.push([t.card.speed, `${formatNumber(speed, locale, 1)} ${t.units.kms}`]);
+  } else {
     const rec = selection.kind === "comet" ? sys.comets[selection.index] : sys.asteroids[selection.index];
     if (rec?.diameterKm) rows.push([t.system.diameter, `${formatNumber(rec.diameterKm, locale)} ${t.units.km}`]);
     if (rec?.periodYears) rows.push([t.system.period, `${formatNumber(rec.periodYears, locale, 1)} ${t.units.years}`]);
@@ -249,6 +254,25 @@ function BodyCard({ selection }: { selection: BodyRef }) {
             </Row>
           ))}
         </dl>
+        {isSun && sun && (sun.image || sun.wind) && (
+          <div className="mt-4 border-t border-hairline pt-3">
+            <p className="text-xs text-haze">{t.sun.live}</p>
+            {sun.image && (
+              <figure className="mt-2">
+                {/* eslint-disable-next-line @next/next/no-img-element -- a live frame proxied from NASA, not a static asset */}
+                <img src={`${sun.image.url}?v=${sun.image.at ?? 0}`} alt={t.sun.live} width={512} height={512} className="aspect-square w-full rounded-[0.9rem] bg-black object-cover" />
+                <figcaption className="mt-1.5 text-[11px] text-dim">{fill(t.sun.image, { time: sun.image.at ? formatUtc(sun.image.at, locale) : "—" })}</figcaption>
+              </figure>
+            )}
+            {sun.wind && (
+              <dl className="mt-2">
+                <Row label={t.sun.wind}>{`${formatNumber(sun.wind.speed, locale)} ${t.units.kms}`}</Row>
+                <Row label={t.sun.field}>{`${formatNumber(sun.wind.bt, locale, 1)} nT, ${t.sun.bz} ${sun.wind.bz > 0 ? "+" : ""}${formatNumber(sun.wind.bz, locale, 1)} nT`}</Row>
+              </dl>
+            )}
+            {sun.wind && <p className="mt-2 text-[11px] leading-relaxed text-dim">{t.sun.windNote}</p>}
+          </div>
+        )}
         {isEarth && approaches && approaches.length > 0 && (
           <div className="mt-4 border-t border-hairline pt-3">
             <p className="text-xs text-haze">{t.system.approaches}</p>
