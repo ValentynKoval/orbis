@@ -18,6 +18,8 @@ const TERRAIN_FROM = 8;
 const TERRAIN_MAX = 15;
 export const TERRAIN_EXAGGERATION = 1.6;
 const EARTH_M = 6_371_000;
+/** Everest with the exaggeration applied, in Earth radii: the most any tile can rise above the base sphere. */
+const TERRAIN_MARGIN = (8849 * TERRAIN_EXAGGERATION) / EARTH_M;
 const TERRARIUM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
 
 interface Node {
@@ -38,6 +40,8 @@ interface Node {
   /** Metres above sea level at the (SEGMENTS+1)² grid points, south-west first. */
   heights: Float32Array | null;
   heightsLoading: boolean;
+  /** Distance from the centre to the farthest corner, Earth radii. */
+  extent: number;
 }
 
 export const tilesVertex = /* glsl */ `
@@ -139,7 +143,7 @@ export class Tiles {
   }
 
   get maxLevel() {
-    return Math.max(...this.providers.map((p) => p.maxLevel));
+    return Math.max(-1, ...this.providers.map((p) => p.maxLevel));
   }
 
   /** Swaps providers (e.g. a new radar frame) and forgets every cached tile. */
@@ -156,7 +160,9 @@ export class Tiles {
     this.drawn.clear();
     this.wanted.length = 0;
     this.usedProviders.clear();
-    if (this.layerFade <= 0.005) {
+    // No providers yet (the radar frame has not arrived) or faded out: nothing to walk. Without the first
+    // guard the root level is Math.min() = Infinity and the loop below never ends.
+    if (!this.providers.length || this.layerFade <= 0.005) {
       this.group.visible = false;
       this.attributions = [];
       return;
@@ -211,7 +217,10 @@ export class Tiles {
       latLonToVec(b.south, b.east),
     ].map((p) => new THREE.Vector3(...p));
     const center = new THREE.Vector3(...latLonToVec((b.north + b.south) / 2, (b.west + b.east) / 2));
-    const radius = Math.max(...corners.map((c) => c.distanceTo(center))) * 1.05 + 0.002;
+    const extent = Math.max(...corners.map((c) => c.distanceTo(center)));
+    // Room for terrain above the base sphere, in proportion to the tile: a fixed margin of 12 km made
+    // hundreds of street-level tiles count as visible and the loader never caught up. Loaded heights refine it.
+    const radius = extent * 1.05 + Math.min(TERRAIN_MARGIN, extent * 2);
     node = {
       z,
       x,
@@ -229,6 +238,7 @@ export class Tiles {
       priority: 0,
       heights: null,
       heightsLoading: false,
+      extent,
     };
     this.nodes.set(key, node);
     return node;
@@ -447,6 +457,9 @@ export class Tiles {
         }
       }
       node.heights = heights;
+      let top = 0;
+      for (const h of heights) if (h > top) top = h;
+      node.radius = node.extent * 1.05 + (top * TERRAIN_EXAGGERATION) / EARTH_M + node.extent * 0.1;
       this.applyHeights(node);
     };
     img.onerror = () => {
