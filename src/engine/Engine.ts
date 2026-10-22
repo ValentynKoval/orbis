@@ -6,6 +6,8 @@ import type { PlaneInfo } from "./layers/Traffic";
 import type { FireGrid } from "@/lib/feeds/fires";
 import type { Quake } from "@/lib/feeds/quakes";
 import { busiestRegion } from "@/lib/tour";
+import type { Eclipse } from "@/lib/eclipses";
+import { PLACES, placeById } from "@/lib/places";
 import type { SearchCandidate } from "@/lib/search";
 import { SatGroup } from "@/lib/feeds/satellites";
 import { setFeed, useOrbis, type PlaneFilter } from "@/store/orbis";
@@ -17,10 +19,11 @@ import { Planet } from "./layers/Planet";
 import { Quakes } from "./layers/Quakes";
 import { Satellites } from "./layers/Satellites";
 import { planeAltitude, Traffic } from "./layers/Traffic";
-import { Tiles } from "./layers/Tiles";
+import { Tiles, TILES_FROM_DIST } from "./layers/Tiles";
 import { Moon } from "./layers/Moon";
 import { Aurora } from "./layers/Aurora";
 import { SkyBodies } from "./layers/SkyBodies";
+import { Celestial } from "./layers/Celestial";
 import { EXIT_FLOOR_AU, HANDOVER_RADII, SolarSystem, type BodyRef } from "./SolarSystem";
 import { EARTH_RADIUS_AU } from "@/lib/orbits";
 import type { BodyRecord } from "@/lib/feeds/bodies";
@@ -78,6 +81,7 @@ export class Engine {
   private moon: Moon;
   private aurora: Aurora;
   private sky: SkyBodies;
+  private celestial: Celestial;
   /** The heliocentric scene; rendered instead of the Earth scene while `space` is "system". */
   readonly system: SolarSystem;
   space: "earth" | "system" = "earth";
@@ -126,19 +130,20 @@ export class Engine {
     this.textureSize = !options.lite && this.renderer.capabilities.maxTextureSize >= 4096 ? "4k" : "2k";
     this.coarse = window.matchMedia("(pointer: coarse)").matches;
 
-    this.planet = new Planet(options.lite ? 112 : 192, pixelRatio);
+    this.planet = new Planet(options.lite ? 112 : 192);
     this.satellites = new Satellites(pixelRatio);
     this.fires = new Fires(pixelRatio);
     const providers: ImageryProvider[] = [EOX];
     const esriKey = process.env.NEXT_PUBLIC_ARCGIS_KEY;
     if (esriKey) providers.push(esriImagery(esriKey));
     const anisotropyMax = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
-    this.tiles = new Tiles(providers, this.planet.earthMaterial.uniforms, anisotropyMax, { terrain: true });
-    this.rain = new Tiles([], {}, 2, { overlay: true, lift: 6e-5 });
+    this.tiles = new Tiles(providers, this.planet.earthMaterial.uniforms, anisotropyMax, { terrain: true, lite: options.lite });
+    this.rain = new Tiles([], {}, 2, { overlay: true, lift: 6e-5, lite: true });
     this.rain.group.renderOrder = 0.6;
     this.moon = new Moon(this.planet.sun);
     this.aurora = new Aurora(this.planet.sun);
     this.sky = new SkyBodies(pixelRatio);
+    this.celestial = new Celestial(3000, pixelRatio);
     this.system = new SolarSystem(canvas, pixelRatio);
     this.system.rig.onTap = (x, y) => {
       const rect = this.canvas.getBoundingClientRect();
@@ -167,7 +172,7 @@ export class Engine {
     this.reticle.frustumCulled = false;
     this.reticle.renderOrder = 10;
 
-    this.inertial.add(this.planet.stars, this.satellites.points, this.satellites.orbit);
+    this.inertial.add(this.celestial.group, this.satellites.points, this.satellites.orbit);
     this.scene.add(this.sky.sun, this.sky.markers);
     this.scene.add(
       this.inertial,
@@ -197,7 +202,15 @@ export class Engine {
     // Sub-metre imagery lets the camera descend to a few hundred metres; 10 m imagery stops it ~13 km up.
     this.baseMinDist = esriKey ? 1.0004 : 1.0024;
     this.rig.minDist = this.baseMinDist;
-    this.rig.onTap = (x, y) => useOrbis.getState().select(this.pick(x, y));
+    this.rig.onTap = (x, y) => {
+      const hit = this.pick(x, y);
+      const ground = hit ? null : this.groundAt(x, y);
+      useOrbis.getState().select(hit ?? (ground ? { kind: "point", ...ground } : null));
+    };
+    this.rig.ground = (lat, lon) => this.tiles.heightAt(lat, lon) / 6_371_000;
+    this.rig.onFly = (goal) => {
+      if (goal.dist < TILES_FROM_DIST) this.tiles.prefetch(goal.lat, goal.lon, goal.dist);
+    };
     this.rig.onHover = (x, y) => {
       this.canvas.style.cursor = this.pick(x, y) ? "pointer" : "grab";
     };
@@ -251,6 +264,7 @@ export class Engine {
       await load("/textures/clouds-fallback-2k.jpg", "uClouds", false);
     })().catch(() => undefined);
 
+    this.celestial.load(this.options.lite ? "2k" : "4k").catch(() => undefined);
     loader
       .loadAsync("/textures/sun-1k.jpg")
       .then((texture) => {
@@ -295,6 +309,7 @@ export class Engine {
     this.moon.dispose();
     this.aurora.dispose();
     this.sky.dispose();
+    this.celestial.dispose();
     this.system.dispose();
     this.ambience.dispose();
     this.reticleMaterial.dispose();
@@ -357,6 +372,7 @@ export class Engine {
   // ---------------------------------------------------------------- time
 
   private historyTimer = 0;
+  private replayFromPast = false;
 
   /**
    * Moves the simulated clock. Anything other than "now at 1×" is a replay:
@@ -364,8 +380,10 @@ export class Engine {
    */
   setTime(simMs: number, rate: number) {
     const now = Date.now();
-    const t = this.space === "system" ? simMs : Math.min(simMs, now);
+    // The future is open too (eclipses, the sky ahead); only a replay of the past hands back to live when it catches up.
+    const t = simMs;
     if (rate === 1 && Math.abs(now - t) < 5000) return this.goLive();
+    this.replayFromPast = t < now - 5000;
     this.clock.set(t, rate);
     if (!this.traffic.replay) {
       this.traffic.setReplay(true);
@@ -504,6 +522,8 @@ export class Engine {
       store.select({ kind, id: key as number });
       const info = this.traffic.shipInfo(key as number, now / 1000);
       if (info) this.rig.flyTo({ lat: info.lat, lon: info.lon, dist: 1.5 }, 1.6);
+    } else if (kind === "place") {
+      this.flyToPlace(String(key));
     } else {
       const quake = store.quakes.find((q) => q.id === key);
       if (!quake) return;
@@ -545,6 +565,7 @@ export class Engine {
     const rotation = gmst(sim);
     this.inertial.rotation.y = -rotation;
     this.moon.update(sim, rotation);
+    this.planet.moon.set(...this.moon.position);
     this.sky.update(sim, this.planet.sun, rotation, this.clockSeconds, this.rig.pose.dist);
 
     this.rig.update(dt, this.width, this.height);
@@ -565,7 +586,11 @@ export class Engine {
     this.rain.update(this.camera, this.height, this.rig.pose.dist);
     // Never fly into a mountain: the floor follows the terrain under the camera.
     const foot = vecToLatLon([this.camera.position.x, this.camera.position.y, this.camera.position.z]);
-    this.rig.minDist = this.baseMinDist + (this.tiles.heightAt(foot.lat, foot.lon) + 300) / 6_371_000;
+    // Leaning views pivot on the ground under the pose; keep the camera itself clear of the terrain beneath it.
+    const under = this.tiles.heightAt(foot.lat, foot.lon) / 6_371_000;
+    const pivot = this.tiles.heightAt(this.rig.pose.lat, this.rig.pose.lon) / 6_371_000;
+    const clearance = Math.max(this.baseMinDist - 1, under - pivot + 300 / 6_371_000);
+    this.rig.minDist = 1 + pivot + clearance / Math.max(0.25, Math.cos(THREE.MathUtils.degToRad(this.rig.tilt)));
     const attributions = [...this.tiles.attributions, ...this.rain.attributions];
     if (attributions.join("|") !== this.lastAttribution) {
       this.lastAttribution = attributions.join("|");
@@ -575,7 +600,7 @@ export class Engine {
     this.satellites.update(sim);
     if (this.traffic.replay) {
       // Playback that catches up with the present hands over to the live feeds.
-      if (this.clock.rate > 0 && sim >= Date.now()) this.goLive();
+      if (this.replayFromPast && this.clock.rate > 0 && sim >= Date.now()) this.goLive();
       else this.traffic.syncReplay(sim / 1000);
     }
     this.traffic.update(sim / 1000);
@@ -583,6 +608,7 @@ export class Engine {
     this.fires.update(sim, this.clockSeconds);
     this.aurora.update(this.clockSeconds);
     this.updateReticle(sim);
+    this.updatePlaces();
     this.updateLiveDetails(sim, now);
     if (now - this.lastLabels > 120) {
       this.lastLabels = now;
@@ -597,6 +623,7 @@ export class Engine {
 
   private systemFrame(sim: number, dt: number, now: number) {
     const s = this.system;
+    s.celestial.setOpacity(1, this.opacity.constellations.value);
     s.update(sim, dt, this.width, this.height);
     // Back inside the hand-over point, still heading in and settled on the Earth: the Earth scene takes over mid-motion.
     if (s.focus.kind === "major" && s.focus.id === "earth" && !s.inTransit && s.rig.pose.dist < EXIT_RADII * EARTH_RADIUS_AU && s.rig.goal.dist <= s.rig.pose.dist) {
@@ -638,11 +665,13 @@ export class Engine {
     useOrbis.setState({ space: "system", focusBody: s.focus, selectedBody: null });
     const after = this.afterHandover;
     this.afterHandover = null;
-    if (overview || (after === "overview" && !s.rig.gliding)) s.rig.flyTo({ lat: OVERVIEW.lat, dist: OVERVIEW.distAu }, 4.5);
+    if (after === "overview" && s.rig.gliding) s.recentre({ kind: "major", id: "sun" }, sim, s.rig.glideRemaining);
+    else if (overview || after === "overview") s.flyToBody({ kind: "major", id: "sun" }, sim, OVERVIEW.distAu, OVERVIEW.lat);
     else if (after && typeof after === "object") {
       useOrbis.getState().select(null);
       useOrbis.getState().focusOn(after);
     }
+    useOrbis.setState({ focusBody: s.focus });
   }
 
   /**
@@ -683,8 +712,7 @@ export class Engine {
   /** The inner solar system from above, centred on the Sun, from wherever the camera is. */
   overview() {
     if (this.space === "earth") return this.goToSystem();
-    this.system.flyToBody({ kind: "major", id: "sun" }, this.clock.now(), OVERVIEW.distAu);
-    this.system.rig.goal.lat = OVERVIEW.lat;
+    this.system.flyToBody({ kind: "major", id: "sun" }, this.clock.now(), OVERVIEW.distAu, OVERVIEW.lat);
     useOrbis.setState({ focusBody: this.system.focus });
   }
 
@@ -716,7 +744,10 @@ export class Engine {
   }
 
   focusBody(ref: BodyRef) {
-    this.system.flyToBody(ref, this.clock.now());
+    const view = this.pendingView && this.pendingView.ref.kind === ref.kind && JSON.stringify(this.pendingView.ref) === JSON.stringify(ref) ? this.pendingView : null;
+    this.pendingView = null;
+    if (view) this.system.flyToBody(ref, this.clock.now(), view.dist, view.lat, view.lon);
+    else this.system.flyToBody(ref, this.clock.now());
     useOrbis.setState({ focusBody: ref });
   }
 
@@ -750,6 +781,8 @@ export class Engine {
     const farFade = 1 - THREE.MathUtils.smoothstep(dist, 150, HANDOVER_RADII * 0.85);
     const surfaceFade = 1 - THREE.MathUtils.smoothstep(dist, 40, 170);
     this.satellites.setOpacity(this.opacity.satellites.value * farFade);
+    // Constellation figures belong to the open sky: they come in as the globe shrinks.
+    this.celestial.setOpacity(1, this.opacity.constellations.value * THREE.MathUtils.smoothstep(this.rig.pose.dist, 5, 14));
     this.quakes.setOpacity(this.opacity.quakes.value * surfaceFade);
     this.fires.setOpacity(this.opacity.fires.value * surfaceFade);
     this.traffic.planes.setOpacity(this.opacity.planes.value * surfaceFade);
@@ -775,6 +808,10 @@ export class Engine {
       return i >= 0 ? layer.displayed(i, sim / 1000) : null;
     }
     if (sel.kind === "quake") return latLonToVec(sel.quake.lat, sel.quake.lon, 1.003);
+    if (sel.kind === "place") {
+      const p = placeById(sel.id);
+      return p ? latLonToVec(p.lat, p.lon, 1.003) : null;
+    }
     return latLonToVec(sel.lat, sel.lon, 1.003);
   }
 
@@ -921,6 +958,91 @@ export class Engine {
     return best;
   }
 
+
+  /** Where a screen point meets the globe, or null for space. */
+  private groundAt(clientX: number, clientY: number): { lat: number; lon: number } | null {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const hit = ray.ray.intersectSphere(new THREE.Sphere(new THREE.Vector3(), 1), new THREE.Vector3());
+    if (!hit) return null;
+    const p = vecToLatLon([hit.x, hit.y, hit.z]);
+    return { lat: Math.round(p.lat * 1e4) / 1e4, lon: Math.round(p.lon * 1e4) / 1e4 };
+  }
+
+  /** Landmark pins: the HTML layer registers here and is told, every frame, where each one is on screen. */
+  placesListener: ((items: { id: string; x: number; y: number; alpha: number }[]) => void) | null = null;
+  watchPlaces(fn: Engine["placesListener"]) {
+    this.placesListener = fn;
+  }
+
+  private placeItems = PLACES.map((p) => ({ id: p.id as string, x: 0, y: 0, alpha: 0, v: new THREE.Vector3(...latLonToVec(p.lat, p.lon, 1.0005)) }));
+
+  private updatePlaces() {
+    if (!this.placesListener) return;
+    const cam = this.camera.position;
+    const layer = this.opacity.places.value;
+    // Pins appear as the globe fills the view and stay until the camera is on the ground.
+    const far = 1 - THREE.MathUtils.smoothstep(this.rig.pose.dist, 3.2, 4.6);
+    const v = new THREE.Vector3();
+    for (const it of this.placeItems) {
+      const facing = it.v.x * (cam.x - it.v.x) + it.v.y * (cam.y - it.v.y) + it.v.z * (cam.z - it.v.z);
+      v.copy(it.v).project(this.camera);
+      const onScreen = v.z < 1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05;
+      // Fade out near the limb rather than vanish.
+      const limb = THREE.MathUtils.smoothstep(facing / (it.v.length() * cam.distanceTo(it.v) || 1), 0, 0.12);
+      it.alpha = onScreen && facing > 0 ? layer * far * limb : 0;
+      it.x = ((v.x + 1) / 2) * this.width;
+      it.y = ((1 - v.y) / 2) * this.height;
+    }
+    this.placesListener(this.placeItems);
+  }
+
+  /**
+   * Takes the globe to an eclipse. Solar: an hour and a half before greatest eclipse at 600×, over the
+   * point the shadow crosses, so the Moon's shadow sweeps the disc in under a minute. Lunar: paused at
+   * greatest eclipse, the camera behind the Moon looking back at the Earth.
+   */
+  watchEclipse(e: Eclipse) {
+    if (e.kind === "solar") {
+      if (this.space === "system") this.returnToEarth();
+      this.setTime(e.time - 90 * 60_000, 600);
+      this.rig.glide({ lat: e.lat, lon: e.lon, dist: 3.4 }, 2.6);
+    } else {
+      // From near the Earth, looking at the Moon: its lit face, red in the umbra.
+      this.setTime(e.time, 0);
+      const moon: BodyRef = { kind: "major", id: "moon" };
+      this.pendingView = { ref: moon, ...this.moonViewFromEarth(e.time) };
+      if (this.space === "system") this.focusBody(moon);
+      else this.goToSystem(moon);
+      useOrbis.setState({ focusBody: moon });
+    }
+  }
+
+  /** A flight's arrival view, used once by the next flight to that body. */
+  private pendingView: { ref: BodyRef; lat: number; lon: number; dist: number } | null = null;
+
+  /** Camera direction around the Moon that looks at it from the Earth's side, 25 lunar radii out. */
+  private moonViewFromEarth(ms: number): { lat: number; lon: number; dist: number } {
+    const m = this.system.heliocentric({ kind: "major", id: "moon" }, ms)!;
+    const e = this.system.heliocentric({ kind: "major", id: "earth" }, ms)!;
+    const p = vecToLatLon([e[0] - m[0], e[1] - m[1], e[2] - m[2]]);
+    // A little off the Earth–Moon line so the Earth is not hidden straight behind the camera.
+    return { lat: p.lat + 8, lon: p.lon + 8, dist: 25 * (1737.4 / 149_597_870.7) };
+  }
+
+  /** Selects a landmark and flies to its best view. */
+  flyToPlace(id: string) {
+    const p = placeById(id);
+    if (!p) return;
+    useOrbis.getState().select({ kind: "place", id: p.id });
+    if (this.space === "system") {
+      this.afterHandover = null;
+      this.returnToEarth();
+    }
+    this.rig.glide({ lat: p.lat, lon: p.lon, dist: p.view }, Math.min(6, 2.2 + Math.abs(Math.log(this.rig.pose.dist / p.view)) * 0.9));
+  }
 
   // ---------------------------------------------------------------- feeds
 

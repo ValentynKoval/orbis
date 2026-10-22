@@ -5,6 +5,7 @@ import { useDict } from "@/i18n/client";
 import { fill } from "@/i18n/config";
 import { search, type SearchCandidate, type SearchResult } from "@/lib/search";
 import { useOrbis } from "@/store/orbis";
+import { PLACES } from "@/lib/places";
 import { Close, Magnifier } from "./icons";
 
 const SWATCH: Record<SearchCandidate["kind"], string> = {
@@ -12,6 +13,7 @@ const SWATCH: Record<SearchCandidate["kind"], string> = {
   plane: "bg-contrail",
   ship: "bg-aurora",
   quake: "bg-seismic",
+  place: "bg-foil",
 };
 
 /** Command palette: one box that finds satellites, flights, ships and quakes, then flies there. */
@@ -39,12 +41,20 @@ export function Search() {
   useEffect(() => {
     if (!open || !engine) return;
     let alive = true;
-    engine.searchCandidates().then((c) => alive && setCandidates(c));
+    // Landmarks come from the dictionary, in the visitor's language.
+    const places: SearchCandidate[] = PLACES.map((p) => ({
+      kind: "place",
+      key: p.id,
+      label: t.places.items[p.id].name,
+      sub: t.places.kinds[p.category],
+      terms: [t.places.items[p.id].name, p.id],
+    }));
+    engine.searchCandidates().then((c) => alive && setCandidates([...places, ...c]));
     requestAnimationFrame(() => input.current?.focus());
     return () => {
       alive = false;
     };
-  }, [open, engine]);
+  }, [open, engine, t]);
 
   const results = useMemo(() => search(query, candidates), [query, candidates]);
 

@@ -54,6 +54,32 @@ export const earthVertex = /* glsl */ `
   }
 `;
 
+const ECLIPSE = /* glsl */ `
+  // Solar eclipse: the share of the Sun's disc the Moon hides from a point on the Earth (Earth radii, Earth-fixed).
+  uniform vec3 uMoon;
+  float sunVisible(vec3 p) {
+    vec3 tm = uMoon - p;
+    float dm = length(tm);
+    if (dm < 1e-3) return 1.0;
+    vec3 dir = tm / dm;
+    if (dot(dir, uSun) <= 0.0) return 1.0;
+    float rm = 0.27272 / dm;
+    const float rs = 0.004653;
+    float d = asin(min(length(cross(dir, uSun)), 1.0));
+    if (d >= rs + rm) return 1.0;
+    float cover;
+    if (d <= abs(rm - rs)) {
+      cover = rm >= rs ? 1.0 : (rm * rm) / (rs * rs);
+    } else {
+      float a = rs * rs * acos(clamp((d * d + rs * rs - rm * rm) / (2.0 * d * rs), -1.0, 1.0));
+      float b = rm * rm * acos(clamp((d * d + rm * rm - rs * rs) / (2.0 * d * rm), -1.0, 1.0));
+      float c = 0.5 * sqrt(max((-d + rs + rm) * (d + rs - rm) * (d - rs + rm) * (d + rs + rm), 0.0));
+      cover = (a + b - c) / (3.14159265 * rs * rs);
+    }
+    return 1.0 - clamp(cover, 0.0, 1.0);
+  }
+`;
+
 export const earthFragment = /* glsl */ `
   uniform sampler2D uDay;
   uniform sampler2D uNight;
@@ -66,10 +92,12 @@ export const earthFragment = /* glsl */ `
   varying vec3 vNormalW;
   varying vec3 vPosW;
   ${SURFACE_BASIS}
+  ${ECLIPSE}
 
   void main() {
     vec3 n = normalize(vNormalW);
     vec3 v = normalize(cameraPosition - vPosW);
+    float sunlight = sunVisible(normalize(vPosW));
     float ndl = dot(n, uSun);
     float day = smoothstep(-0.08, 0.22, ndl);
     float twilight = smoothstep(-0.22, 0.0, ndl) * (1.0 - smoothstep(0.0, 0.3, ndl));
@@ -90,23 +118,23 @@ export const earthFragment = /* glsl */ `
     // Close to the ground the night side gets a soft ambient so streets stay readable, and the
     // 10 km-per-texel city-lights map, which would smear into a blob, fades out.
     float close = 1.0 - smoothstep(1.02, 1.45, length(cameraPosition));
-    vec3 lit = albedo * (max(ndl, 0.0) * 1.35 + mix(0.012, 0.32, close)) * (1.0 - 0.5 * shadow);
-    lit += albedo * vec3(1.0, 0.42, 0.12) * twilight * 0.22;
+    vec3 lit = albedo * (max(ndl, 0.0) * 1.35 * sunlight + mix(0.012, 0.32, close)) * (1.0 - 0.5 * shadow);
+    lit += albedo * vec3(1.0, 0.42, 0.12) * twilight * 0.22 * sunlight;
 
     // Sun glint on open water.
     vec3 h = normalize(uSun + v);
     float spec = pow(max(dot(n, h), 0.0), 320.0) * 0.7 + pow(max(dot(n, h), 0.0), 60.0) * 0.02;
-    lit += vec3(1.0, 0.86, 0.68) * spec * water * day * (1.0 - cloud);
+    lit += vec3(1.0, 0.86, 0.68) * spec * water * day * (1.0 - cloud) * sunlight;
 
     // City lights: Black Marble luminance, sodium-warm, dimmed by cloud cover.
     float lights = texture2D(uNight, vUv).r;
     lights = pow(lights, 2.4) * 3.2;
-    vec3 night = vec3(1.0, 0.68, 0.36) * lights * (1.0 - day) * uLights * (1.0 - 0.75 * cloud) * (1.0 - 0.9 * close);
+    vec3 night = vec3(1.0, 0.68, 0.36) * lights * max(1.0 - day, 1.0 - sunlight) * uLights * (1.0 - 0.75 * cloud) * (1.0 - 0.9 * close);
 
     // Thin atmosphere seen through the limb.
     float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0);
     vec3 sky = mix(vec3(0.28, 0.52, 1.0), vec3(1.0, 0.48, 0.18), twilight);
-    vec3 atmosphere = sky * rim * smoothstep(-0.3, 0.35, ndl) * 0.9;
+    vec3 atmosphere = sky * rim * smoothstep(-0.3, 0.35, ndl) * 0.9 * sunlight;
 
     gl_FragColor = vec4(lit + night + atmosphere, 1.0);
     #include <tonemapping_fragment>
@@ -122,11 +150,13 @@ export const cloudsFragment = /* glsl */ `
   varying vec2 vUv;
   varying vec3 vNormalW;
   varying vec3 vPosW;
+  ${ECLIPSE}
 
   void main() {
     vec3 n = normalize(vNormalW);
     vec3 v = normalize(cameraPosition - vPosW);
     float ndl = dot(n, uSun);
+    float sunlight = sunVisible(normalize(vPosW));
     float mask = texture2D(uClouds, vUv).r;
     // Break the mask's soft edges with value noise so clouds read as texture rather than blur.
     float detail = noise2(vUv * vec2(1400.0, 700.0)) * 0.6 + noise2(vUv * vec2(3100.0, 1550.0)) * 0.4;
@@ -137,8 +167,8 @@ export const cloudsFragment = /* glsl */ `
     float camDist = length(cameraPosition);
     density *= smoothstep(1.012, 1.09, camDist) * mix(0.5, 1.0, smoothstep(1.3, 3.0, camDist));
     float twilight = smoothstep(-0.22, 0.0, ndl) * (1.0 - smoothstep(0.0, 0.3, ndl));
-    vec3 color = vec3(1.0) * (max(ndl, 0.0) * 1.15 + 0.035);
-    color += vec3(1.0, 0.45, 0.2) * twilight * 0.35;
+    vec3 color = vec3(1.0) * (max(ndl, 0.0) * 1.15 * sunlight + 0.035);
+    color += vec3(1.0, 0.45, 0.2) * twilight * 0.35 * sunlight;
     // Clouds thicken toward the limb, as they do in orbital photos.
     float limb = 1.0 + pow(1.0 - max(dot(n, v), 0.0), 2.0) * 0.35;
     float alpha = density * uOpacity * mix(0.35, 0.95, smoothstep(-0.25, 0.15, ndl)) * limb;
@@ -177,32 +207,6 @@ export const atmosphereFragment = /* glsl */ `
     gl_FragColor = vec4(color * density * 1.25, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
-  }
-`;
-
-export const starsVertex = /* glsl */ `
-  attribute float aMag;
-  attribute vec3 aColor;
-  uniform float uPixelRatio;
-  varying vec3 vColor;
-  varying float vMag;
-  void main() {
-    vColor = aColor;
-    vMag = aMag;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    gl_Position = projectionMatrix * mv;
-    gl_PointSize = (0.9 + aMag * 2.2) * uPixelRatio;
-  }
-`;
-
-export const starsFragment = /* glsl */ `
-  uniform float uOpacity;
-  varying vec3 vColor;
-  varying float vMag;
-  void main() {
-    float d = length(gl_PointCoord - 0.5);
-    float a = smoothstep(0.5, 0.0, d);
-    gl_FragColor = vec4(vColor * (0.25 + vMag * 0.9), a * uOpacity);
   }
 `;
 
@@ -493,6 +497,37 @@ export const bodyFragment = /* glsl */ `
     #include <colorspace_fragment>
   }
 `;
+
+/**
+ * The Moon in the Earth-centred scene: the body shader plus the Earth's shadow. Inside the umbra only
+ * sunlight bent through the Earth's atmosphere arrives, red from every sunset on the planet at once.
+ */
+export const moonFragment = bodyFragment
+  .replace(
+    "varying vec3 vPosW;",
+    `varying vec3 vPosW;
+  uniform vec3 uEarthPos;
+  uniform float uEarthRadius;
+  float earthShadow(vec3 world) {
+    vec3 q = (world - uEarthPos) / uEarthRadius;
+    vec3 anti = -uSun;
+    float x = dot(q, anti);
+    if (x <= 0.0) return 1.0;
+    float d = length(q - anti * x);
+    // Cone radii at the Moon's distance (Earth radii), widened 2 % by the atmosphere.
+    float umbra = 1.02 * (1.0 - x * 0.004612);
+    float penumbra = 1.02 * (1.0 + x * 0.004697);
+    if (d >= penumbra) return 1.0;
+    if (d <= umbra) return 0.0;
+    return smoothstep(0.0, 1.0, (d - umbra) / (penumbra - umbra));
+  }`,
+  )
+  .replace(
+    "vec3 color = mix(albedo * lit, albedo * 1.35, uEmissive);",
+    `float light = earthShadow(vPosW);
+    vec3 umbral = albedo * vec3(0.55, 0.16, 0.06) * (ndl * 0.9 + 0.05);
+    vec3 color = mix(umbral, albedo * lit, light);`,
+  );
 
 /** The Sun as a billboard: a hot disc with a soft corona, sized in world units. */
 export const sunVertex = /* glsl */ `

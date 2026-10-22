@@ -17,14 +17,40 @@ export function formatAgo(ms: number, now: number, locale: Locale): string {
 }
 
 export function formatUtc(ms: number, locale: Locale, withDate = true): string {
+  return formatTime(ms, locale, "UTC", withDate);
+}
+
+/** Clock time in an IANA zone ("Europe/Kyiv"); falls back to UTC for an unknown zone. */
+export function formatTime(ms: number, locale: Locale, timeZone: string, withDate = true): string {
   return new Intl.DateTimeFormat(intlLocale(locale), {
-    timeZone: "UTC",
+    timeZone: safeZone(timeZone),
     ...(withDate ? { day: "numeric", month: "short" } : {}),
     hour: "2-digit",
     minute: "2-digit",
     second: withDate ? undefined : "2-digit",
     hourCycle: "h23",
   }).format(ms);
+}
+
+/** "UTC+3", "UTC−5:30", "UTC" for a moment in a zone (the offset changes with daylight saving). */
+export function zoneLabel(ms: number, timeZone: string): string {
+  if (safeZone(timeZone) === "UTC") return "UTC";
+  const part = new Intl.DateTimeFormat("en-GB", { timeZone, timeZoneName: "longOffset" })
+    .formatToParts(ms)
+    .find((p) => p.type === "timeZoneName")?.value;
+  const m = part?.match(/GMT([+-])(\d{2}):(\d{2})/);
+  if (!m) return "UTC";
+  const h = Number(m[2]);
+  return `UTC${m[1] === "-" ? "−" : "+"}${h}${m[3] === "00" ? "" : `:${m[3]}`}`;
+}
+
+function safeZone(timeZone: string): string {
+  try {
+    new Intl.DateTimeFormat("en-GB", { timeZone });
+    return timeZone;
+  } catch {
+    return "UTC";
+  }
 }
 
 export function formatDate(isoDate: string, locale: Locale): string {

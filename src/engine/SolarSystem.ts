@@ -6,8 +6,8 @@ import type { BodyRecord } from "@/lib/feeds/bodies";
 import { trackPosition, type SpacecraftTrack } from "@/lib/feeds/horizons";
 import { AU_KM, EARTH_RADIUS_AU, moonPosition, orbitPath, planetPosition, PLANETS, smallBodyPosition, toScene, type Planet } from "@/lib/orbits";
 import { CameraRig } from "./CameraRig";
-import { makeStars } from "./layers/Planet";
-import { bodyFragment, bodyVertex, logDepth, markerFragment, markerVertex, sunFragment, sunVertex } from "./shaders";
+import { Celestial } from "./layers/Celestial";
+import { bodyFragment, bodyVertex, logDepth, markerFragment, markerVertex, moonFragment, sunFragment, sunVertex } from "./shaders";
 
 /** The Earth scene hands over to this one at this many Earth radii (and takes back below it). */
 export const HANDOVER_RADII = 400;
@@ -58,6 +58,33 @@ const SPIN_H: Record<MajorBody, number> = {
   neptune: 16.11,
   moon: 655.7,
 };
+/**
+ * North poles of rotation (IAU WGCCRE, J2000 right ascension and declination, degrees). Uranus lies on
+ * its side, Venus and Uranus spin backwards, and Saturn's rings sit in its equator, so they open and
+ * close as seen from the Earth over its 29-year orbit.
+ */
+const POLES: Partial<Record<MajorBody, [number, number]>> = {
+  mercury: [281.0103, 61.4155],
+  venus: [272.76, 67.16],
+  mars: [317.269, 54.432],
+  jupiter: [268.057, 64.495],
+  saturn: [40.589, 83.537],
+  uranus: [257.311, -15.175],
+  neptune: [299.36, 43.46],
+};
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+function poleQuaternion(id: MajorBody): THREE.Quaternion {
+  const p = POLES[id];
+  if (!p) return new THREE.Quaternion();
+  const a = THREE.MathUtils.degToRad(p[0]);
+  const d = THREE.MathUtils.degToRad(p[1]);
+  // Equatorial direction in scene axes (y = celestial north).
+  const v = new THREE.Vector3(Math.cos(d) * Math.cos(a), Math.sin(d), -Math.cos(d) * Math.sin(a));
+  return new THREE.Quaternion().setFromUnitVectors(Y_AXIS, v);
+}
+const POLE_Q = Object.fromEntries((Object.keys(POLES) as MajorBody[]).map((id) => [id, poleQuaternion(id)])) as Record<MajorBody, THREE.Quaternion>;
+const spinQ = new THREE.Quaternion();
+
 const ORBIT_YEARS: Record<Planet, number> = { mercury: 0.2408, venus: 0.6152, earth: 1, mars: 1.8808, jupiter: 11.862, saturn: 29.457, uranus: 84.02, neptune: 164.8 };
 export const MAJOR: MajorBody[] = ["sun", "mercury", "venus", "earth", "moon", "mars", "jupiter", "saturn", "uranus", "neptune"];
 
@@ -100,15 +127,16 @@ export class SolarSystem {
   private moonOrbit: THREE.Line | null = null;
   private cometOrbits = new THREE.Group();
   private selectedOrbit: THREE.Line | null = null;
-  private stars: THREE.Points;
+  /** The sky, centred on the camera so no zoom ever reaches it. */
+  readonly celestial: Celestial;
   /** Heliocentric scene-frame positions (AU) of everything, this frame. */
   private pos = new Map<string, Vec3>();
   private cometPos: Vec3[] = [];
   private asteroidPos: Float32Array = new Float32Array(0);
   private focusPos: Vec3 = [0, 0, 0];
   private clockSeconds = 0;
-  /** A flight between bodies: the orbit centre glides from the old body to the new one while the camera pulls back and dives. */
-  private transit: { from: Vec3; start: number; duration: number; dive: number; final: number; dived: boolean } | null = null;
+  /** A flight between bodies (wall-clock seconds, like the camera glides): the orbit centre slides from the old body to the new one while the camera pulls back and dives. */
+  private transit: { from: Vec3; start: number; duration: number; dive: number; final: number; dived: boolean; lat?: number; lon?: number } | null = null;
   /** Screen positions of the major bodies this frame (px), for labels and overlap checks. */
   private screen = new Map<MajorBody, { x: number; y: number; px: number }>();
   /** The Moon sits on top of the Earth from afar: its marker and label hide until they separate. */
@@ -137,14 +165,16 @@ export class SolarSystem {
 
     for (const id of MAJOR) {
       if (id === "sun") continue;
+      // The Moon also darkens and reddens in the Earth's shadow.
       const material = new THREE.ShaderMaterial({
-        ...logDepth(bodyVertex, bodyFragment),
+        ...logDepth(bodyVertex, id === "moon" ? moonFragment : bodyFragment),
         uniforms: {
           uMap: { value: null },
           uSun: { value: new THREE.Vector3(1, 0, 0) },
           uAmbient: { value: 0.012 },
           uEmissive: { value: 0 },
           uOpacity: { value: 1 },
+          ...(id === "moon" ? { uEarthPos: { value: new THREE.Vector3() }, uEarthRadius: { value: EARTH_RADIUS_AU } } : {}),
         },
       });
       const mesh = new THREE.Mesh(new THREE.SphereGeometry(RADIUS_KM[id] / AU_KM, 96, 48), material);
@@ -184,14 +214,15 @@ export class SolarSystem {
     this.scene.add(this.asteroidPoints);
 
     this.scene.add(this.orbits, this.cometOrbits, this.craftPaths);
-    this.stars = makeStars(5200, 900);
-    this.scene.add(this.stars);
+    this.celestial = new Celestial(700, pixelRatio);
+    this.scene.add(this.celestial.group);
     this.buildPlanetOrbits(Date.now());
   }
 
   // ---------------------------------------------------------------- assets
 
   async loadTextures(lite: boolean) {
+    this.celestial.load(lite ? "2k" : "4k").catch(() => undefined);
     const loader = new THREE.TextureLoader();
     const jobs: [MajorBody, string][] = [
       ["earth", `/textures/day-${String(new Date().getUTCMonth() + 1).padStart(2, "0")}-2k.jpg`],
@@ -225,7 +256,8 @@ export class SolarSystem {
       uv.setXY(i, (r - saturnR * 1.24) / (saturnR * (2.27 - 1.24)), 0.5);
     }
     this.ring = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map: ringTexture, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
-    this.ring.rotation.x = Math.PI / 2 - THREE.MathUtils.degToRad(26.7);
+    // The ring geometry faces +z; turn it into Saturn's equatorial plane.
+    this.ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0).applyQuaternion(POLE_Q.saturn));
     this.scene.add(this.ring);
   }
 
@@ -356,7 +388,17 @@ export class SolarSystem {
    * centre glides from one to the other while the camera pulls back far
    * enough to see the way, then dives; `finalDist` overrides the arrival distance.
    */
-  flyToBody(ref: BodyRef, ms: number, finalDist?: number) {
+  /**
+   * Moves the orbit centre to another body over `duration` seconds without touching the camera's
+   * distance: used when a flight already in progress should end up centred elsewhere.
+   */
+  recentre(ref: BodyRef, ms: number, duration: number) {
+    const from = this.transit ? this.focusPos : (this.heliocentric(this.focus, ms) ?? this.focusPos);
+    this.setFocus(ref, ms);
+    this.transit = { from, start: performance.now() / 1000, duration: Math.max(0.5, duration), dive: this.rig.goal.dist, final: this.rig.goal.dist, dived: true };
+  }
+
+  flyToBody(ref: BodyRef, ms: number, finalDist?: number, lat?: number, lon?: number) {
     const r = this.radiusAu(ref);
     const from = this.transit ? this.focusPos : (this.heliocentric(this.focus, ms) ?? this.focusPos);
     const to = this.heliocentric(ref, ms) ?? from;
@@ -368,8 +410,8 @@ export class SolarSystem {
     if (same) {
       // A long zoom on the same body is a steady timed flight; a short hop just eases.
       const ratio = Math.abs(Math.log10(final / this.rig.pose.dist));
-      if (ratio > 1.3) this.rig.glide({ dist: final }, 2 + ratio * 0.9);
-      else this.rig.flyTo({ dist: final }, 2.2);
+      if (ratio > 1.3) this.rig.glide({ dist: final, lat, lon }, 2 + ratio * 0.9);
+      else this.rig.flyTo({ dist: final, lat, lon }, 2.2);
       return;
     }
     const gap = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
@@ -377,8 +419,15 @@ export class SolarSystem {
     // Arriving at the Earth, stay outside the hand-over until the centre has settled; the dive continues in the Earth scene.
     const earth = ref.kind === "major" && ref.id === "earth";
     const dive = earth ? Math.max(final, HANDOVER_RADII * 1.25 * EARTH_RADIUS_AU) : final;
-    this.transit = { from, start: this.clockSeconds, duration, dive, final, dived: false };
-    this.rig.glide({ dist: Math.max(this.rig.pose.dist, gap * 0.45) }, duration * 0.5);
+    const pull = Math.max(this.rig.pose.dist, gap * 0.45);
+    if (dive >= pull) {
+      // Heading out (an overview): one steady pull-back while the centre slides, no pause halfway.
+      this.transit = { from, start: performance.now() / 1000, duration, dive, final, dived: true, lat, lon };
+      this.rig.glide({ dist: final, lat, lon }, duration);
+      return;
+    }
+    this.transit = { from, start: performance.now() / 1000, duration, dive, final, dived: false, lat, lon };
+    this.rig.glide({ dist: pull, lat, lon }, duration * 0.5);
   }
 
   update(simMs: number, dt: number, width: number, height: number) {
@@ -408,17 +457,18 @@ export class SolarSystem {
     let f = this.heliocentric(this.focus, simMs) ?? [0, 0, 0];
     if (this.transit) {
       const tr = this.transit;
-      const t = Math.min(1, (this.clockSeconds - tr.start) / tr.duration);
+      const t = Math.min(1, (performance.now() / 1000 - tr.start) / tr.duration);
       const e = t * t * t * (t * (t * 6 - 15) + 10);
       f = [tr.from[0] + (f[0] - tr.from[0]) * e, tr.from[1] + (f[1] - tr.from[1]) * e, tr.from[2] + (f[2] - tr.from[2]) * e];
       if (!tr.dived && t > 0.45) {
         tr.dived = true;
-        this.rig.glide({ dist: tr.dive }, tr.duration * 0.55);
+        // Keep heading for the arrival direction even if the pull-back was cut short by slow frames.
+        this.rig.glide({ dist: tr.dive, lat: tr.lat, lon: tr.lon }, tr.duration * 0.55);
       }
       if (t >= 1) {
         this.transit = null;
         // The last leg (through the hand-over, when heading home) is a steady dive.
-        if (tr.final < this.rig.goal.dist) this.rig.glide({ dist: tr.final }, 3.5);
+        if (tr.final < this.rig.goal.dist) this.rig.glide({ dist: tr.final, lat: tr.lat, lon: tr.lon }, 3.5);
       }
     }
     this.focusPos = f;
@@ -430,6 +480,7 @@ export class SolarSystem {
     }
     this.camera.updateMatrixWorld();
     this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
+    this.celestial.group.position.copy(this.camera.position);
 
     // Place everything relative to the focus.
     const rel = (p: Vec3): [number, number, number] => [p[0] - f[0], p[1] - f[1], p[2] - f[2]];
@@ -444,14 +495,19 @@ export class SolarSystem {
       else if (id === "moon") {
         const d = new THREE.Vector3(earth[0] - p[0], earth[1] - p[1], earth[2] - p[2]).normalize();
         mesh.rotation.set(0, Math.atan2(-d.z, d.x), 0);
-      } else mesh.rotation.set(0, ((simMs / 3_600_000) * 2 * Math.PI) / SPIN_H[id], 0);
+      } else {
+        // Spin about the body's own pole.
+        spinQ.setFromAxisAngle(Y_AXIS, ((simMs / 3_600_000) * 2 * Math.PI) / SPIN_H[id]);
+        mesh.quaternion.copy(POLE_Q[id]).multiply(spinQ);
+      }
     }
     if (this.ring) this.ring.position.copy(this.meshes.get("saturn")!.position);
+    (this.materials.get("moon")!.uniforms.uEarthPos.value as THREE.Vector3).copy(this.meshes.get("earth")!.position);
     this.orbits.position.set(...rel([0, 0, 0]));
     this.cometOrbits.position.copy(this.orbits.position);
     this.craftPaths.position.copy(this.orbits.position);
     this.moonOrbit?.position.set(...rel(earth));
-    this.stars.position.set(0, 0, 0);
+
 
     // Markers for major bodies and comets.
     const n = MAJOR.length + this.comets.length + this.craft.length;
@@ -622,6 +678,6 @@ export class SolarSystem {
     this.sunMaterial.dispose();
     this.markerGeometry.dispose();
     this.asteroidGeometry.dispose();
-    this.stars.geometry.dispose();
+    this.celestial.dispose();
   }
 }

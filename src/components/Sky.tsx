@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { useDict, useLocale } from "@/i18n/client";
 import { fill } from "@/i18n/config";
-import { formatAgo, formatLatLon, formatNumber, formatUtc } from "@/lib/format";
+import { formatAgo, formatLatLon, formatNumber } from "@/lib/format";
 import { compass, type Pass } from "@/lib/passes";
 import { useOrbis } from "@/store/orbis";
 import type { Overhead } from "@/engine/Engine";
 import { Close, Compass, Target } from "./icons";
-import { useNow } from "./hooks";
+import { useClockFormat, useNow } from "./hooks";
+import { EclipsesAhead, SkyTonight } from "./SkyExtras";
 
 interface Weather {
   temperature: number;
@@ -44,6 +45,7 @@ export function Sky() {
   const [overhead, setOverhead] = useState<Overhead | null>(null);
   const [weather, setWeather] = useState<Weather | null>(null);
   const now = useNow(1000);
+  const clock = useClockFormat();
   const place = observer ? `${observer.lat.toFixed(4)},${observer.lon.toFixed(4)}` : "";
   const currentPasses = passes?.place === place ? passes.list : null;
 
@@ -167,7 +169,7 @@ export function Sky() {
                   {upcoming.slice(0, 8).map((p) => (
                     <li key={p.start} className="flex items-center justify-between gap-3 py-2 text-xs">
                       <div className="min-w-0">
-                        <p className="readout text-lunar">{formatUtc(p.max, locale)} {t.hud.utc}</p>
+                        <p className="readout text-lunar">{`${clock.time(p.max)} ${clock.label(p.max)}`}</p>
                         <p className="text-dim">
                           {fill(t.sky.passLine, {
                             el: String(p.maxElevation),
@@ -215,8 +217,10 @@ export function Sky() {
                   </ul>
                 )}
                 {overhead && <p className="mt-2 text-[10px] text-dim">{formatAgo(overhead.at, now, locale)}</p>}
+                <SkyTonight lat={observer.lat} lon={observer.lon} now={now} />
               </>
             )}
+            <EclipsesAhead now={now} />
           </div>
         </section>
       )}

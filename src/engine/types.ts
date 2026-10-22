@@ -1,8 +1,9 @@
 import type { Quake } from "@/lib/feeds/quakes";
 import type { SatGroup } from "@/lib/feeds/satellites";
 import type { Pass } from "@/lib/passes";
+import type { PlaceId } from "@/lib/places";
 
-export type LayerKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "aurora" | "rain" | "clouds" | "lights" | "borders";
+export type LayerKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "aurora" | "rain" | "places" | "clouds" | "lights" | "borders" | "constellations";
 
 export type FeedKey = "satellites" | "planes" | "ships" | "quakes" | "fires" | "clouds" | "aurora" | "rain";
 export type FeedState = { status: "idle" | "loading" | "ready" | "error"; count: number; updated: number | null };
@@ -12,7 +13,10 @@ export type Selection =
   | { kind: "plane"; id: string }
   | { kind: "ship"; id: number }
   | { kind: "quake"; quake: Quake }
-  | { kind: "fire"; index: number; lat: number; lon: number; frp: number; time: number };
+  | { kind: "fire"; index: number; lat: number; lon: number; frp: number; time: number }
+  | { kind: "place"; id: PlaceId }
+  /** Any spot on the globe that was tapped where there is no object. */
+  | { kind: "point"; lat: number; lon: number };
 
 export interface SatLive {
   lat: number;

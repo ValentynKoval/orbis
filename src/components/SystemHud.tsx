@@ -10,7 +10,7 @@ import type { SolarWind } from "@/lib/feeds/sun";
 import { useOrbis } from "@/store/orbis";
 import { BODY_COLORS, MAJOR, RADIUS_KM, type BodyRef, type MajorBody } from "@/engine/SolarSystem";
 import { Close, Target } from "./icons";
-import { useNow } from "./hooks";
+import { useClockFormat, useNow } from "./hooks";
 
 const sameRef = (a: BodyRef | null, b: BodyRef | null) =>
   !!a && !!b && a.kind === b.kind && (a.kind === "major" ? a.id === (b as { id: MajorBody }).id : a.index === (b as { index: number }).index);
@@ -36,7 +36,6 @@ function lightTime(au: number, t: ReturnType<typeof useDict>, locale: "uk" | "en
 
 export function SystemHud() {
   const t = useDict();
-  const locale = useLocale();
   const engine = useOrbis((s) => s.engine);
   const selected = useOrbis((s) => s.selectedBody);
   const focus = useOrbis((s) => s.focusBody);
@@ -45,6 +44,7 @@ export function SystemHud() {
   const time = useOrbis((s) => s.time);
   const now = useNow(time.live ? 1000 : 200);
   const sim = engine?.clock.now() ?? now;
+  const clock = useClockFormat();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -151,7 +151,7 @@ export function SystemHud() {
             ))}
           </div>
           <p className="readout ml-auto text-xs text-lunar" suppressHydrationWarning>
-            {formatUtc(sim, locale)} {t.hud.utc}
+            {`${clock.time(sim)} ${clock.label(sim)}`}
           </p>
           <button
             type="button"
@@ -187,6 +187,7 @@ function BodyCard({ selection }: { selection: BodyRef }) {
   const [approaches, setApproaches] = useState<CloseApproach[] | null>(null);
   const [sun, setSun] = useState<{ wind: SolarWind | null; image: { url: string; at: number | null } | null } | null>(null);
   const sim = engine?.clock.now() ?? now;
+  const clock = useClockFormat();
   const sys = engine?.system;
   const isEarth = selection.kind === "major" && selection.id === "earth";
   const isSun = selection.kind === "major" && selection.id === "sun";
@@ -261,7 +262,7 @@ function BodyCard({ selection }: { selection: BodyRef }) {
               <figure className="mt-2">
                 {/* eslint-disable-next-line @next/next/no-img-element -- a live frame proxied from NASA, not a static asset */}
                 <img src={`${sun.image.url}?v=${sun.image.at ?? 0}`} alt={t.sun.live} width={512} height={512} className="aspect-square w-full rounded-[0.9rem] bg-black object-cover" />
-                <figcaption className="mt-1.5 text-[11px] text-dim">{fill(t.sun.image, { time: sun.image.at ? formatUtc(sun.image.at, locale) : "—" })}</figcaption>
+                <figcaption className="mt-1.5 text-[11px] text-dim">{fill(t.sun.image, { time: sun.image.at ? `${clock.time(sun.image.at)} ${clock.label(sun.image.at)}` : "—" })}</figcaption>
               </figure>
             )}
             {sun.wind && (

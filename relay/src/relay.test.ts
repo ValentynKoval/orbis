@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildPlaneSnapshot } from "../../src/lib/feeds/adsb";
 import { ShipKind, shipKind } from "../../src/lib/feeds/live";
-import { parseAisMessage, ShipStore } from "./ships";
+import { parseAisMessage, ShipStore } from "../../src/lib/feeds/ships";
 
 describe("adsb.lol snapshot", () => {
   it("converts units, flags emergencies and drops stale or anonymous aircraft", () => {

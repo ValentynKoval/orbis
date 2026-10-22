@@ -36,6 +36,8 @@ export function GlobeStage() {
       useOrbis.getState().setEngine(engine);
       if (process.env.NODE_ENV !== "production") Object.assign(window, { __orbisEngine: engine, __orbisStore: useOrbis });
       engine.start().catch(() => useOrbis.setState({ webglError: true }));
+      // Map tiles survive between visits (public/sw.js); dev skips it so hot reload stays honest.
+      if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
     });
     return () => {
       disposed = true;

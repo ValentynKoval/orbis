@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { ADSB_ALL_URL, buildPlaneSnapshot, type AdsbAircraft } from "../../src/lib/feeds/adsb";
 import type { PlaneSnapshot, PlaneTrack } from "../../src/lib/feeds/live";
 import { FRAME_EVERY_S, History, planeFrame, shipFrame, type FrameKind } from "./history";
-import { ShipStore, type PositionUpdate, type StaticUpdate } from "./ships";
+import { ShipStore, type PositionUpdate, type ShipUpdates, type StaticUpdate } from "../../src/lib/feeds/ships";
 
 export interface Env {
   HUB: DurableObjectNamespace<Hub>;
@@ -40,7 +40,7 @@ export class Hub extends DurableObject<Env> {
   private shipsJsonAt = 0;
   private lastMeta = 0;
   private history: History;
-  private stats = { startedAt: Date.now(), shipsSnapshotAt: 0, shipsSnapshotT: 0, shipsSnapshotError: "", planeErrors: 0, planeError: "", lastPoll: 0 };
+  private stats = { startedAt: Date.now(), shipsSnapshotAt: 0, shipsSnapshotT: 0, shipsSnapshotError: "", ingests: 0, planeErrors: 0, planeError: "", lastPoll: 0 };
   private lastShipsPoll = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -75,6 +75,19 @@ export class Hub extends DurableObject<Env> {
       return json(this.shipsJson);
     }
     if (path === "/ships/names") return json(JSON.stringify(this.ships.names()));
+    // The site samples the AIS stream on demand and posts what it heard; the hub keeps the sum.
+    if (path === "/ships/ingest" && request.method === "POST") {
+      const body = (await new Response(request.body!.pipeThrough(new DecompressionStream("gzip"))).json()) as ShipUpdates;
+      this.ships.apply(body);
+      this.stats.ingests++;
+      this.shipsJsonAt = 0;
+      return json(JSON.stringify({ ok: true, ships: this.ships.size }));
+    }
+    if (path === "/ships/dump") {
+      this.ships.prune(Math.floor(Date.now() / 1000));
+      const body = new Response(JSON.stringify(this.ships.dump())).body!.pipeThrough(new CompressionStream("gzip"));
+      return new Response(body, { headers: { "Content-Type": "application/json; charset=utf-8", "Content-Encoding": "gzip" }, encodeBody: "manual" });
+    }
     const ship = path.match(/^\/ships\/(\d{6,9})$/);
     if (ship) {
       const detail = this.ships.detail(Number(ship[1]));

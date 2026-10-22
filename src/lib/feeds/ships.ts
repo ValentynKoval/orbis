@@ -1,4 +1,4 @@
-import { COORD_SCALE, shipKind, type ShipDetail, type ShipSnapshot } from "../../src/lib/feeds/live";
+import { COORD_SCALE, shipKind, type ShipDetail, type ShipSnapshot } from "./live";
 
 /** A vessel not heard from in this long is dropped from the map. */
 const STALE_S = 3600;
@@ -35,6 +35,11 @@ export interface PositionUpdate {
   heading: number | null;
   t: number;
   name?: string;
+}
+
+export interface ShipUpdates {
+  positions: PositionUpdate[];
+  statics: StaticUpdate[];
 }
 
 export interface StaticUpdate {
@@ -167,6 +172,25 @@ export class ShipStore {
       snap.age.push(Math.max(0, nowS - v.t));
     }
     return snap;
+  }
+
+  /** Everything known, as the updates that would rebuild it (tracks excluded). */
+  dump(): ShipUpdates {
+    const positions: PositionUpdate[] = [];
+    const statics: StaticUpdate[] = [];
+    for (const v of this.vessels.values()) {
+      if (!v.t) continue;
+      positions.push({ mmsi: v.mmsi, lat: v.lat, lon: v.lon, sog: v.sog, cog: v.cog, heading: v.heading, t: v.t });
+      if (v.name || v.type || v.destination) {
+        statics.push({ mmsi: v.mmsi, name: v.name, callsign: v.callsign, destination: v.destination, type: v.type, lengthM: v.lengthM, imo: v.imo });
+      }
+    }
+    return { positions, statics };
+  }
+
+  apply(u: ShipUpdates) {
+    for (const p of u.positions) this.position(p);
+    for (const s of u.statics) this.static(s);
   }
 
   names(): { ids: number[]; names: string[] } {

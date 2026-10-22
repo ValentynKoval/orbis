@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
     "assets": "node scripts/build-assets.mjs",
+    "assets:sky": "node scripts/build-sky.mjs",
     "relay:deploy": "npm --prefix relay run deploy",
     "test:e2e": "playwright test"
   },

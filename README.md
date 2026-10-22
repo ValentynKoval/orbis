@@ -34,7 +34,13 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
 - **Out to the planets.** Zoom past the Moon and the scene hands over to a heliocentric view: the Sun, eight planets
   at real size and real positions (JPL elements), the Moon, ~900 large asteroids and famous or currently active
   comets from NASA/JPL, with orbits, labels, close-approach lists and a clock that runs at up to a month per second.
-- **Mountains in 3D.** Zoomed in, each tile is raised by real elevation (Mapzen Terrarium, 1.6×) and lit by its slopes; the camera never flies into a ridge.
+- **Mountains in 3D.** Zoomed in, each tile is raised by real elevation (Mapzen Terrarium, 1.6×) and lit by its slopes; the camera leans toward the horizon as it descends (right-drag, Ctrl-drag, Q/E and R/F turn and tilt it) and never flies into a ridge.
+- **Fast streets.** Tiles load target-first: the level the view needs is requested at once, nearest the centre first, 18 at a time, with stale requests cancelled and images decoded off the main thread. Elevation comes as 2 KB height grids from the site's own CDN instead of 120 KB PNGs, one grid per 16 tiles. Flights prefetch their destination, and a service worker keeps tiles between visits.
+- **Landmarks.** 30 pins with their stories in both languages: the highest, lowest and farthest points of the planet, the deepest hole and the hottest and coldest places, natural wonders, the pads spaceflight started from, and where space rocks struck.
+- **Tap anywhere.** Any spot of the globe opens a card with its name (OpenStreetMap), ground height or ocean depth, local time, sunrise and sunset, and the weather now.
+- **The real sky.** 5,044 stars at their catalogue positions and colours, the 88 constellation figures, and the Milky Way from Gaia, in both scenes; the planets, Moon and Sun stand among the right stars.
+- **Eclipses.** Found in the browser from the site's own ephemerides (checked against NASA's catalogue to a few minutes). The Moon's shadow darkens the Earth and switches on the streetlights in the umbra; the Moon turns red in the Earth's shadow. One button runs the clock through the next eclipses.
+- **Your time.** Every clock shows the visitor's time zone ("UTC+3"); a click switches to UTC.
 - **Live weather.** RainViewer radar painted over the terrain, refreshed every 10 minutes, and Open-Meteo conditions for your place.
 - **Deep space.** Voyager 1 and 2, New Horizons, JWST, Parker Solar Probe and Europa Clipper from JPL Horizons, with their paths a year behind and ahead.
 - **One continuous zoom.** The Earth scene runs out to 400 Earth radii with the Sun, Moon and planets already in the sky, then hands over to the heliocentric scene mid-flight: the camera keeps its distance, direction and easing, data layers thin out long before the switch, labels carry across and the HUD cross-fades, so nothing jumps.
@@ -42,7 +48,7 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
 - **Guided tour.** One button (or `/live?tour=1`) flies through everything live: the ISS, the busiest sky and sea lanes, the strongest quake of the day, fires, city lights, the aurora oval, then out past the Moon to Saturn, Voyager 1 and a month-per-second view of the inner solar system, and home. Touching the controls ends it.
 - **The Sun, live.** The Sun's card shows SDO's latest AIA 304 Å frame and the solar wind at L1 (speed, field strength, Bz) from NOAA SWPC.
 - **Aurora.** NOAA's OVATION forecast drawn as curtains over the night side, with the live Kp index.
-- **The sky above me.** ISS passes for your place over the next two days (naked-eye visibility included) and what is
+- **The sky above me.** The Moon's phase and the planets above the horizon, ISS passes for your place over the next two days (naked-eye visibility included) and what is
   overhead right now: nearby aircraft and satellites high above the horizon.
 - **Satellites.** ~16,000 active objects from CelesTrak, propagated with SGP4 in a Web Worker and advanced along their
   orbits on the GPU between updates, so thousands of points move smoothly at 60 fps. Tap one for altitude, speed,
@@ -116,6 +122,9 @@ one-download-per-update rule. Full credits are on the site's Sources page.
 | Earthquakes | USGS Earthquake Hazards Program | Public domain |
 | Fires | NASA FIRMS (LANCE) | Free, attribution |
 | Clouds | NASA GIBS | Free, attribution |
+| Stars, constellations | d3-celestial (Yale Bright Star Catalogue) | BSD 3-clause |
+| Milky Way | NASA/Goddard SVS Deep Star Maps 2020, ESA/Gaia/DPAC | Free, attribution |
+| Place names | OpenStreetMap via Nominatim | ODbL 1.0 |
 | Earth imagery | NASA Blue Marble, Black Marble | Public domain |
 | Borders | Natural Earth | Public domain |
 
@@ -139,3 +148,4 @@ suite (desktop and phone) against that build. `npm run assets` regenerates the t
 5. Street-level imagery, the solar system, aurora, sky passes, shareable views. *(done)*
 6. Terrain, rain radar, spacecraft, a continuous Earth-to-system hand-over, faster first paint. *(done)*
 7. Cinematic flights, a guided tour, the live Sun, labels that never overlap. *(done)*
+8. Faster streets, landmarks, tap-anywhere cards, tilted 3D views, the real sky, eclipses, local time. *(done)*

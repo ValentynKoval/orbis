@@ -1,11 +1,10 @@
 "use client";
 
 import { useRef } from "react";
-import { useDict, useLocale } from "@/i18n/client";
+import { useDict } from "@/i18n/client";
 import { fill } from "@/i18n/config";
-import { formatUtc } from "@/lib/format";
 import { useOrbis } from "@/store/orbis";
-import { useNow } from "./hooks";
+import { useNow, useClockFormat } from "./hooks";
 
 const SPAN_MS = 24 * 3600_000;
 const RATES = [1, 60, 600] as const;
@@ -21,8 +20,8 @@ function offsetLabel(ms: number, t: ReturnType<typeof useDict>) {
 
 /** The last 24 hours as a scrubber: drag to any moment, play it back, or return to live. */
 export function Timeline() {
+  const clock = useClockFormat();
   const t = useDict();
-  const locale = useLocale();
   const engine = useOrbis((s) => s.engine);
   const time = useOrbis((s) => s.time);
   /** Speed to resume with after a pause. */
@@ -93,9 +92,11 @@ export function Timeline() {
             ))}
           </div>
           <p className="readout ml-auto truncate text-right text-xs text-haze" aria-live="polite">
-            <span className="text-lunar" suppressHydrationWarning>
-              <span className="hidden sm:inline">{formatUtc(sim, locale)}</span>
-              <span className="sm:hidden">{formatUtc(sim, locale, false).slice(0, 5)}</span> {t.hud.utc}
+            <span className="hidden text-lunar sm:inline" suppressHydrationWarning>
+              {`${clock.time(sim)} ${clock.label(sim)}`}
+            </span>
+            <span className="text-lunar sm:hidden" suppressHydrationWarning>
+              {`${clock.time(sim, false).slice(0, 5)} ${clock.label(sim)}`}
             </span>
             <span className="hidden sm:inline">, {offsetLabel(wall - sim, t)}</span>
           </p>
@@ -124,16 +125,18 @@ export function Timeline() {
             value={Math.max(start, Math.min(wall, sim))}
             onChange={(e) => seek(Number(e.target.value))}
             aria-label={t.timeline.label}
-            aria-valuetext={`${formatUtc(sim, locale)} ${t.hud.utc}`}
+            aria-valuetext={`${clock.time(sim)} ${clock.label(sim)}`}
           />
         </div>
-        <div aria-hidden className="readout flex justify-between text-[10px] text-dim" suppressHydrationWarning>
+        <div aria-hidden className="readout flex justify-between text-[10px] text-dim">
           {ticks.map((tick, i) => (
-            <span key={i}>{i === ticks.length - 1 ? t.timeline.now : formatUtc(tick, locale, false).slice(0, 5)}</span>
+            <span key={i} suppressHydrationWarning>
+              {i === ticks.length - 1 ? t.timeline.now : clock.time(tick, false).slice(0, 5)}
+            </span>
           ))}
         </div>
         {!time.live && historyStart !== null && sim < historyStart && (
-          <p className="text-[11px] text-dim">{fill(t.timeline.noTraffic, { time: formatUtc(historyStart, locale) })}</p>
+          <p className="text-[11px] text-dim">{fill(t.timeline.noTraffic, { time: `${clock.time(historyStart)} ${clock.label(historyStart)}` })}</p>
         )}
       </div>
     </section>

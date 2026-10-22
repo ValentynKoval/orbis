@@ -54,6 +54,11 @@ interface OrbisState {
   toggleSound(): void;
   /** The guided tour is running. */
   tour: boolean;
+  /** The browser's IANA time zone ("UTC" until the client has mounted, so server and first render agree). */
+  timeZone: string;
+  /** Show times in UTC instead of the visitor's zone. */
+  utc: boolean;
+  toggleUtc(): void;
   setTour(on: boolean): void;
   setPlaneFilter(filter: PlaneFilter): void;
   toggleShipKind(kind: number): void;
@@ -67,7 +72,7 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   progress: 0,
   ready: false,
   webglError: false,
-  layers: { satellites: true, planes: true, ships: true, quakes: true, fires: true, aurora: true, rain: true, clouds: true, lights: true, borders: false },
+  layers: { satellites: true, planes: true, ships: true, quakes: true, fires: true, aurora: true, rain: true, places: true, clouds: true, lights: true, borders: false, constellations: true },
   feeds: { satellites: idle, planes: idle, ships: idle, quakes: idle, fires: idle, clouds: idle, aurora: idle, rain: idle },
   selection: null,
   selectionLive: null,
@@ -77,6 +82,17 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   sound: false,
   tour: false,
   setTour: (tour) => set({ tour }),
+  timeZone: "UTC",
+  utc: false,
+  toggleUtc: () => {
+    const utc = !get().utc;
+    set({ utc });
+    try {
+      localStorage.setItem("orbis-utc", utc ? "1" : "0");
+    } catch {
+      // Private mode: the choice lasts for this visit.
+    }
+  },
   toggleSound: () => {
     const sound = !get().sound;
     set({ sound });

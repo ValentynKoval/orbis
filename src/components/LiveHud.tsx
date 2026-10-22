@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { useDict, useLocale } from "@/i18n/client";
 import { fill } from "@/i18n/config";
-import { formatAgo, formatDate, formatLatLon, formatNumber, formatUtc } from "@/lib/format";
+import { formatAgo, formatDate, formatLatLon, formatNumber } from "@/lib/format";
 import { useOrbis } from "@/store/orbis";
+import { placeById } from "@/lib/places";
 import type { FeedKey, LayerKey, Selection } from "@/engine/types";
 import { ArrowUpRight, Close, Recenter, Stack, Target } from "./icons";
-import { useNow } from "./hooks";
+import { useClockFormat, useNow } from "./hooks";
 import { Analyst } from "./Analyst";
 import { Search } from "./Search";
 import { Timeline } from "./Timeline";
@@ -18,6 +19,8 @@ import { Share } from "./Share";
 import { Perf } from "./Perf";
 import { Orbit, Play } from "./icons";
 import { Tour } from "./Tour";
+import { PlaceLabels } from "./PlaceLabels";
+import { PointCard } from "./PointCard";
 import { TopBar } from "./TopBar";
 
 const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
@@ -28,9 +31,11 @@ const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
   { key: "fires", feed: "fires", swatch: "bg-ember" },
   { key: "aurora", feed: "aurora", swatch: "bg-[#5cf27a]" },
   { key: "rain", feed: "rain", swatch: "bg-[#4aa3ff]" },
+  { key: "places", swatch: "bg-foil" },
   { key: "clouds", feed: "clouds", swatch: "bg-cloud" },
   { key: "lights", swatch: "bg-glow" },
   { key: "borders", swatch: "bg-foil" },
+  { key: "constellations", swatch: "bg-ion" },
 ];
 
 export function LiveHud() {
@@ -86,8 +91,11 @@ export function LiveHud() {
 
   return (
     <div className="pointer-events-none fixed inset-0 z-10">
+      {/* Pins and body names first, so every panel and button sits above them. */}
+      <PlaceLabels />
+      <BodyLabels />
       <TopBar live />
-      <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 max-sm:top-[calc(max(1rem,env(safe-area-inset-top))+4rem)]">
+      <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 max-lg:top-[calc(max(1rem,env(safe-area-inset-top))+4rem)]">
         <Fade shown={space === "earth"} layer={false} className="flex items-center gap-2">
           <Analyst />
           <Sky />
@@ -122,7 +130,6 @@ export function LiveHud() {
       <Fade shown={space === "system"}>
         <SystemHud />
       </Fade>
-      <BodyLabels />
       <Tour />
       <h1 className="sr-only">{t.nav.live}</h1>
 
@@ -145,7 +152,11 @@ export function LiveHud() {
           <LayerPanel />
         </div>
       </div>
-      {selection && <ObjectCard key={cardKey(selection)} selection={selection} />}
+      {selection?.kind === "point" ? (
+        <PointCard key={cardKey(selection)} lat={selection.lat} lon={selection.lon} />
+      ) : (
+        selection && <ObjectCard key={cardKey(selection)} selection={selection} />
+      )}
       <Timeline />
       <Footnote />
       </Fade>
@@ -156,7 +167,8 @@ export function LiveHud() {
 
 function cardKey(s: Selection) {
   if (s.kind === "quake") return s.quake.id;
-  if (s.kind === "plane" || s.kind === "ship") return `${s.kind}-${s.id}`;
+  if (s.kind === "plane" || s.kind === "ship" || s.kind === "place") return `${s.kind}-${s.id}`;
+  if (s.kind === "point") return `point-${s.lat},${s.lon}`;
   return `${s.kind}-${s.index}`;
 }
 
@@ -249,7 +261,10 @@ function LayerPanel() {
         <div className="mt-1 border-t border-hairline px-1 pt-2">
           <button
             type="button"
-            onClick={() => engine?.rig.flyTo({ lat: 20, lon: engine.rig.pose.lon, dist: 4.4 }, 1.6)}
+            onClick={() => {
+              engine?.rig.resetOrientation();
+              engine?.rig.flyTo({ lat: 20, lon: engine.rig.pose.lon, dist: 4.4 }, 1.6);
+            }}
             className="flex w-full items-center gap-3 rounded-[0.9rem] px-2 py-2 text-left text-sm text-haze transition-colors duration-300 hover:bg-white/[0.04] hover:text-lunar"
           >
             <Recenter className="size-4" />
@@ -279,6 +294,7 @@ function ObjectCard({ selection }: { selection: Selection }) {
   const select = useOrbis((s) => s.select);
   const now = useNow(1000);
   const simS = (engine?.clock.now() ?? now) / 1000;
+  const clock = useClockFormat();
 
   let kicker = "";
   let title = "";
@@ -351,19 +367,30 @@ function ObjectCard({ selection }: { selection: Selection }) {
     rows = [
       [t.card.magnitude, formatNumber(q.mag, locale, 1)],
       [t.card.depth, `${formatNumber(q.depthKm, locale, 1)} ${t.units.km}`],
-      [t.card.time, `${formatUtc(q.time, locale)} ${t.hud.utc}, ${formatAgo(q.time, now, locale)}`],
+      [t.card.time, `${clock.time(q.time)} ${clock.label(q.time)}, ${formatAgo(q.time, now, locale)}`],
       [t.card.position, formatLatLon(q.lat, q.lon)],
     ];
     if (q.tsunami) note = t.card.tsunami;
     focus = { lat: q.lat, lon: q.lon, dist: 2.2 };
     link = { href: q.url, label: t.card.usgs };
-  } else {
+  } else if (selection.kind === "place") {
+    const p = placeById(selection.id);
+    kicker = p ? t.places.kinds[p.category] : "";
+    title = t.places.items[selection.id].name;
+    accent = "text-foil";
+    if (p) {
+      rows = [[t.card.position, formatLatLon(p.lat, p.lon)]];
+      if (p.elevationM !== undefined) rows.unshift([t.places.elevation, fill(p.elevationM < 0 ? t.places.belowSea : t.places.aboveSea, { m: formatNumber(Math.abs(p.elevationM), locale) })]);
+      focus = { lat: p.lat, lon: p.lon, dist: p.view };
+    }
+    note = t.places.items[selection.id].text;
+  } else if (selection.kind === "fire") {
     kicker = t.card.fire;
     title = formatLatLon(selection.lat, selection.lon);
     accent = "text-ember";
     rows = [
       [t.card.power, `${formatNumber(selection.frp, locale)} ${t.units.mw}`],
-      [t.card.detected, `${formatUtc(selection.time, locale)} ${t.hud.utc}, ${formatAgo(selection.time, now, locale)}`],
+      [t.card.detected, `${clock.time(selection.time)} ${clock.label(selection.time)}, ${formatAgo(selection.time, now, locale)}`],
     ];
     note = t.card.fireNote;
     focus = { lat: selection.lat, lon: selection.lon, dist: 1.6 };
@@ -401,11 +428,11 @@ function ObjectCard({ selection }: { selection: Selection }) {
           {focus && (
             <button
               type="button"
-              onClick={() => focus && engine?.rig.flyTo(focus, 1.5)}
+              onClick={() => (selection.kind === "place" ? engine?.flyToPlace(selection.id) : focus && engine?.rig.flyTo(focus, 1.5))}
               className="inline-flex items-center gap-2 rounded-full border border-hairline px-3.5 py-2 text-xs text-lunar transition-colors duration-300 hover:border-foil/50"
             >
               <Target className="size-3.5" />
-              {t.card.focus}
+              {selection.kind === "place" ? t.places.flyThere : t.card.focus}
             </button>
           )}
           {link && (

@@ -31,15 +31,31 @@ export class CameraRig {
   interactive = false;
   /** Higher = snappier. Fly-tos temporarily lower it. */
   stiffness = 6;
+  /**
+   * Near the ground the camera leans toward the horizon so relief reads in 3D (degrees from straight
+   * down). It follows the altitude on its own; the visitor can add to it and turn the view
+   * (right-drag or Ctrl-drag, Q/E and R/F keys, a two-finger twist).
+   */
+  tilt = 0;
+  heading = 0;
+  private tiltUser = 0;
+  private headingGoal = 0;
+  /** Ground height under a point in Earth radii, so a tilted view pivots on the terrain, not on sea level. */
+  ground: ((lat: number, lon: number) => number) | null = null;
 
   onTap: ((x: number, y: number) => void) | null = null;
   onHover: ((x: number, y: number) => void) | null = null;
   onUserMove: (() => void) | null = null;
+  /** Told where every programmed flight is heading, so the destination can start loading early. */
+  onFly: ((goal: CameraPose) => void) | null = null;
 
   private velocity = { lat: 0, lon: 0 };
   private pointers = new Map<number, { x: number; y: number }>();
   private down: { x: number; y: number; t: number } | null = null;
   private pinchDist = 0;
+  private pinchAngle = 0;
+  /** Right button or Ctrl/Shift held: the drag turns and tilts instead of panning. */
+  private orbitDrag = false;
   private flyUntil = 0;
   private lastHover = 0;
   /** A timed flight: the pose follows an ease-in-out curve from `from` to `to` (distance in log space). */
@@ -54,6 +70,7 @@ export class CameraRig {
     el.addEventListener("pointerup", this.handleUp);
     el.addEventListener("pointercancel", this.handleUp);
     el.addEventListener("wheel", this.handleWheel, { passive: false });
+    el.addEventListener("contextmenu", this.handleContextMenu);
     window.addEventListener("keydown", this.handleKey);
   }
 
@@ -63,6 +80,7 @@ export class CameraRig {
     this.el.removeEventListener("pointerup", this.handleUp);
     this.el.removeEventListener("pointercancel", this.handleUp);
     this.el.removeEventListener("wheel", this.handleWheel);
+    this.el.removeEventListener("contextmenu", this.handleContextMenu);
     window.removeEventListener("keydown", this.handleKey);
   }
 
@@ -75,6 +93,7 @@ export class CameraRig {
     this.glideState = null;
     this.stiffness = 4.2 / Math.max(0.3, duration);
     this.flyUntil = performance.now() + duration * 1000 * 1.6;
+    this.onFly?.(this.goal);
   }
 
   /**
@@ -92,10 +111,17 @@ export class CameraRig {
     this.glideState = { from: { ...this.pose }, to, start: performance.now(), duration: Math.max(0.05, duration) * 1000 };
     Object.assign(this.goal, to);
     this.flyUntil = 0;
+    this.onFly?.(this.goal);
   }
 
   get gliding() {
     return this.glideState !== null;
+  }
+
+  /** Seconds left in the current timed flight (0 when none). */
+  get glideRemaining() {
+    const g = this.glideState;
+    return g ? Math.max(0, (g.start + g.duration - performance.now()) / 1000) : 0;
   }
 
   /**
@@ -122,6 +148,18 @@ export class CameraRig {
       this.goal.lon = this.glideState.to.lon;
     }
     other.glideState = null;
+  }
+
+  /** North up and the automatic lean only. */
+  resetOrientation() {
+    this.tiltUser = 0;
+    this.headingGoal = Math.round(this.heading / 360) * 360;
+  }
+
+  /** The lean the altitude asks for: none from orbit, up to 55° a few kilometres up. */
+  private autoTilt() {
+    if (this.radius <= 0) return 0;
+    return 55 * (1 - THREE.MathUtils.smoothstep(this.pose.dist, 1.004, 1.09));
   }
 
   /** Sets the goal directly (scroll scrubbing); the camera still eases. */
@@ -177,10 +215,37 @@ export class CameraRig {
       this.goal.lon -= shift;
     }
 
-    const [x, y, z] = latLonToVec(this.pose.lat, this.pose.lon, this.pose.dist);
-    this.camera.position.set(x, y, z);
-    this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(0, 0, 0);
+    const ka = 1 - Math.exp(-dt * 5);
+    this.heading += (this.headingGoal - this.heading) * ka;
+    // The visitor's extra lean fades out with altitude, so leaving the ground always ends looking straight down.
+    const lean = this.radius > 0 ? this.tiltUser * (1 - THREE.MathUtils.smoothstep(this.pose.dist, 1.05, 1.4)) : 0;
+    const tiltGoal = THREE.MathUtils.clamp(this.autoTilt() + lean, 0, 75);
+    this.tilt += (tiltGoal - this.tilt) * ka;
+
+    if (this.tilt < 0.05 && Math.abs(this.heading % 360) < 0.05) {
+      const [x, y, z] = latLonToVec(this.pose.lat, this.pose.lon, this.pose.dist);
+      this.camera.position.set(x, y, z);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(0, 0, 0);
+    } else {
+      // Pivot on the ground point under the pose; the camera stays the same distance from it, leaning
+      // back against the heading by the tilt angle.
+      const ground = this.radius + (this.ground?.(this.pose.lat, this.pose.lon) ?? 0);
+      const t = latLonToVec(this.pose.lat, this.pose.lon, ground);
+      const target = new THREE.Vector3(t[0], t[1], t[2]);
+      const up = target.clone().normalize();
+      const east = new THREE.Vector3(0, 1, 0).cross(up);
+      if (east.lengthSq() < 1e-10) east.set(1, 0, 0);
+      east.normalize();
+      const north = up.clone().cross(east).normalize();
+      const h = THREE.MathUtils.degToRad(this.heading);
+      const forward = north.multiplyScalar(Math.cos(h)).add(east.multiplyScalar(Math.sin(h)));
+      const range = Math.max(1e-6, this.pose.dist - ground);
+      const a = THREE.MathUtils.degToRad(this.tilt);
+      this.camera.position.copy(target).addScaledVector(up, range * Math.cos(a)).addScaledVector(forward, -range * Math.sin(a));
+      this.camera.up.copy(up);
+      this.camera.lookAt(target);
+    }
     if (Math.abs(this.offset) > 1e-4 || Math.abs(this.offsetY) > 1e-4) {
       this.camera.setViewOffset(width, height, -this.offset * width, -this.offsetY * height, width, height);
     } else if (this.camera.view) {
@@ -208,11 +273,16 @@ export class CameraRig {
     this.flyUntil = 0;
     this.glideState = null;
     this.stiffness = 14;
-    if (this.pointers.size === 1) this.down = { x: e.clientX, y: e.clientY, t: performance.now() };
+    if (this.pointers.size === 1) {
+      this.down = { x: e.clientX, y: e.clientY, t: performance.now() };
+      this.orbitDrag = e.button === 2 || e.ctrlKey || e.shiftKey;
+    }
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
       this.pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+      this.pinchAngle = Math.atan2(b.y - a.y, b.x - a.x);
       this.down = null;
+      this.orbitDrag = false;
     }
   };
 
@@ -232,24 +302,42 @@ export class CameraRig {
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
       if (this.pinchDist > 0) {
         const altitude = this.goal.dist - this.radius;
         this.goal.dist = this.radius + altitude * (this.pinchDist / d);
+        if (this.radius > 0) {
+          let turn = angle - this.pinchAngle;
+          if (turn > Math.PI) turn -= 2 * Math.PI;
+          if (turn < -Math.PI) turn += 2 * Math.PI;
+          this.headingGoal -= THREE.MathUtils.radToDeg(turn);
+        }
       }
       this.pinchDist = d;
+      this.pinchAngle = angle;
+      this.onUserMove?.();
+      return;
+    }
+    const dx = cur.x - prev.x;
+    const dy = cur.y - prev.y;
+    if (this.orbitDrag && this.radius > 0) {
+      this.headingGoal -= dx * 0.3;
+      this.tiltUser = THREE.MathUtils.clamp(this.tiltUser - dy * 0.25, -this.autoTilt(), 70);
       this.onUserMove?.();
       return;
     }
     const s = this.dragScale();
-    const dx = cur.x - prev.x;
-    const dy = cur.y - prev.y;
     const latScale = 1 / Math.max(0.3, Math.cos(THREE.MathUtils.degToRad(this.pose.lat)));
-    this.goal.lon -= dx * s * latScale;
-    this.goal.lat += dy * s;
+    // Screen up points along the heading: rotate the drag into north/east.
+    const h = THREE.MathUtils.degToRad(this.heading);
+    const north = dx * Math.sin(h) + dy * Math.cos(h);
+    const east = -dx * Math.cos(h) + dy * Math.sin(h);
+    this.goal.lon += east * s * latScale;
+    this.goal.lat += north * s;
     const dt = Math.max(1 / 120, (e.timeStamp - (this.lastMoveT || e.timeStamp)) / 1000 || 1 / 60);
     this.lastMoveT = e.timeStamp;
-    this.velocity.lon = (-dx * s * latScale) / dt;
-    this.velocity.lat = (dy * s) / dt;
+    this.velocity.lon = (east * s * latScale) / dt;
+    this.velocity.lat = (north * s) / dt;
     this.onUserMove?.();
   };
 
@@ -282,17 +370,15 @@ export class CameraRig {
     const stepDeg = this.radius > 0 ? Math.max(0.05, Math.min(12, (this.goal.dist - this.radius) * 4)) : 4;
     switch (e.key) {
       case "ArrowLeft":
-        this.goal.lon -= stepDeg;
-        break;
       case "ArrowRight":
-        this.goal.lon += stepDeg;
-        break;
       case "ArrowUp":
-        this.goal.lat += stepDeg;
+      case "ArrowDown": {
+        const h = THREE.MathUtils.degToRad(this.radius > 0 ? this.heading : 0);
+        const [fx, fy] = e.key === "ArrowLeft" ? [-1, 0] : e.key === "ArrowRight" ? [1, 0] : e.key === "ArrowUp" ? [0, 1] : [0, -1];
+        this.goal.lat += (fy * Math.cos(h) - fx * Math.sin(h)) * stepDeg;
+        this.goal.lon += (fx * Math.cos(h) + fy * Math.sin(h)) * stepDeg;
         break;
-      case "ArrowDown":
-        this.goal.lat -= stepDeg;
-        break;
+      }
       case "+":
       case "=":
         this.goal.dist = this.radius + (this.goal.dist - this.radius) * 0.8;
@@ -300,6 +386,31 @@ export class CameraRig {
       case "-":
       case "_":
         this.goal.dist = this.radius + (this.goal.dist - this.radius) * 1.25;
+        break;
+      case "q":
+      case "Q":
+        if (this.radius <= 0) return;
+        this.headingGoal += 15;
+        break;
+      case "e":
+      case "E":
+        if (this.radius <= 0) return;
+        this.headingGoal -= 15;
+        break;
+      case "r":
+      case "R":
+        if (this.radius <= 0) return;
+        this.tiltUser = Math.min(70, this.tiltUser + 8);
+        break;
+      case "f":
+      case "F":
+        if (this.radius <= 0) return;
+        this.tiltUser = Math.max(-this.autoTilt(), this.tiltUser - 8);
+        break;
+      case "n":
+      case "N":
+        if (this.radius <= 0) return;
+        this.resetOrientation();
         break;
       default:
         return;
@@ -309,6 +420,10 @@ export class CameraRig {
     this.glideState = null;
     this.stiffness = 6;
     this.onUserMove?.();
+  };
+
+  private handleContextMenu = (e: Event) => {
+    if (this.interactive) e.preventDefault();
   };
 
   private handleWheel = (e: WheelEvent) => {

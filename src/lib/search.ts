@@ -1,6 +1,6 @@
 /** Ranking for the search palette: exact beats prefix beats word prefix beats substring. */
 
-export type SearchKind = "satellite" | "plane" | "ship" | "quake";
+export type SearchKind = "satellite" | "plane" | "ship" | "quake" | "place";
 
 export interface SearchCandidate {
   kind: SearchKind;
@@ -26,6 +26,8 @@ function scoreTerm(term: string, q: string): number {
   if (n === q) return 100;
   // Whole words: "ISS (ZARYA)" is the ISS. Word starts: "SPACE STATION" matches "STAT".
   const words = term.toUpperCase().split(/[\s\-_/()]+/);
+  // A name that starts with the word beats one that merely contains it ("ISS (ZARYA)" over a callsign ending in -ISS).
+  if (words[0] === q) return 95;
   if (words.includes(q)) return 90;
   if (n.startsWith(q)) return 70 - Math.min(20, n.length - q.length);
   if (words.some((w) => w.startsWith(q))) return 45;
@@ -41,6 +43,8 @@ export function search(query: string, candidates: Iterable<SearchCandidate>, per
     let best = 0;
     for (const t of c.terms) best = Math.max(best, scoreTerm(t, q));
     if (!best) continue;
+    // Satellites and landmarks are what people look for by name; a callsign or registration that happens to match ranks after them.
+    best += c.kind === "satellite" ? 6 : c.kind === "place" ? 5 : 0;
     let list = byKind.get(c.kind);
     if (!list) byKind.set(c.kind, (list = []));
     list.push({ ...c, score: best });

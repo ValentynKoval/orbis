@@ -79,10 +79,10 @@ test.describe("live globe", () => {
 
 test("sources credit every data provider", async ({ page }) => {
   await page.goto("/en/sources");
-  for (const name of ["CelesTrak", "adsb.lol", "aisstream.io", "Digitraffic", "USGS", "NASA FIRMS", "NASA GIBS", "Natural Earth"]) {
+  for (const name of ["CelesTrak", "adsb.lol", "aisstream.io", "Digitraffic", "USGS", "NASA FIRMS", "NASA GIBS", "Natural Earth", "OpenStreetMap", "d3-celestial", "NASA/Goddard SVS"]) {
     await expect(page.getByRole("heading", { name: new RegExp(name) })).toBeVisible();
   }
-  await expect(page.getByText("ODbL")).toBeVisible();
+  await expect(page.getByText("ODbL").first()).toBeVisible();
 });
 
 test("feeds answer with CDN cache headers", async ({ request }) => {
@@ -156,4 +156,30 @@ test("the guided tour starts, captions its stops and stops on Escape", async ({ 
   await expect(tour).not.toContainText("The Earth, right now");
   await page.keyboard.press("Escape");
   await expect(tour).toBeHidden();
+});
+
+test.describe("the planet up close", () => {
+  test("finds a landmark and tells its story", async ({ page }) => {
+    await page.goto("/en/live");
+    await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
+    await page.getByRole("button", { name: "Search" }).click();
+    await page.getByRole("dialog").getByPlaceholder("Satellite, flight, ship or place").fill("Everest");
+    await expect(page.getByRole("option").first()).toContainText("Mount Everest");
+    await page.keyboard.press("Enter");
+    const card = page.getByRole("complementary", { name: "Mount Everest" });
+    await expect(card).toContainText("8,849 m above sea level");
+    await expect(card.getByRole("button", { name: "Fly there" })).toBeVisible();
+  });
+
+  test("shows local time, the Moon and the eclipses ahead", async ({ page, isMobile }) => {
+    await page.goto("/en/live?at=50.45,30.52,3.6");
+    await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
+    if (!isMobile) await expect(page.locator("header")).toContainText(/UTC([+−]\d+)?/);
+    await page.getByRole("button", { name: "Above me" }).click();
+    await page.getByRole("button", { name: "Use the view centre" }).click();
+    const panel = page.getByRole("region", { name: "The sky above you" });
+    await expect(panel).toContainText(/% lit/);
+    await expect(panel).toContainText("Eclipses ahead");
+    await expect(panel.getByRole("button", { name: "Watch" }).first()).toBeVisible();
+  });
 });

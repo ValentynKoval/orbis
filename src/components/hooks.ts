@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useLocale } from "@/i18n/client";
+import { formatTime, zoneLabel } from "@/lib/format";
+import { useOrbis } from "@/store/orbis";
 
 /** Re-renders every `ms` milliseconds and returns the current time. */
 export function useNow(ms = 1000): number {
@@ -10,6 +13,31 @@ export function useNow(ms = 1000): number {
     return () => window.clearInterval(id);
   }, [ms]);
   return now;
+}
+
+/** Picks up the browser's time zone once mounted (the server renders UTC). */
+export function useTimeZoneSetup() {
+  useEffect(() => {
+    let utc = false;
+    try {
+      utc = localStorage.getItem("orbis-utc") === "1";
+    } catch {
+      // Storage blocked: default to local time.
+    }
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    useOrbis.setState({ timeZone, utc });
+  }, []);
+}
+
+/** Formats times in the visitor's zone (or UTC, by choice) and names the zone: "UTC+3". */
+export function useClockFormat() {
+  const locale = useLocale();
+  const zone = useOrbis((s) => (s.utc ? "UTC" : s.timeZone));
+  return {
+    zone,
+    time: (ms: number, withDate = true) => formatTime(ms, locale, zone, withDate),
+    label: (ms: number) => zoneLabel(ms, zone),
+  };
 }
 
 export function useMediaQuery(query: string): boolean {

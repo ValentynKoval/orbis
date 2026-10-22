@@ -6,8 +6,6 @@ import {
   cloudsFragment,
   earthFragment,
   earthVertex,
-  starsFragment,
-  starsVertex,
   logDepth,
 } from "../shaders";
 
@@ -15,21 +13,22 @@ const ATMOSPHERE_OUTER = 1.065;
 
 /** The Earth itself: surface, clouds, atmosphere halo, borders, and the star field around it. */
 export class Planet {
+  /** The Moon's Earth-fixed position (Earth radii), shared by the surface and cloud shaders for solar eclipses. */
+  readonly moon = new THREE.Vector3(0, 0, 1e6);
   readonly earth: THREE.Mesh;
   readonly clouds: THREE.Mesh;
   readonly atmosphere: THREE.Mesh;
-  readonly stars: THREE.Points;
   readonly borders = new THREE.Group();
   readonly earthMaterial: THREE.ShaderMaterial;
   readonly cloudsMaterial: THREE.ShaderMaterial;
   private atmosphereMaterial: THREE.ShaderMaterial;
-  private starsMaterial: THREE.ShaderMaterial;
   private blank: THREE.DataTexture;
 
-  constructor(segments: number, pixelRatio: number) {
+  constructor(segments: number) {
     this.blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
     this.blank.needsUpdate = true;
     const sun = new THREE.Vector3(1, 0, 0);
+    // Far away until the Moon layer reports in, so no eclipse is drawn by accident.
 
     const sphere = new THREE.SphereGeometry(1, segments, segments / 2);
     this.earthMaterial = new THREE.ShaderMaterial({
@@ -40,6 +39,7 @@ export class Planet {
         uWater: { value: this.blank },
         uClouds: { value: this.blank },
         uSun: { value: sun },
+        uMoon: { value: this.moon },
         uCloudsOn: { value: 1 },
         uLights: { value: 1 },
       },
@@ -49,7 +49,7 @@ export class Planet {
 
     this.cloudsMaterial = new THREE.ShaderMaterial({
       ...logDepth(earthVertex, cloudsFragment),
-      uniforms: { uClouds: { value: this.blank }, uSun: { value: sun }, uOpacity: { value: 1 } },
+      uniforms: { uClouds: { value: this.blank }, uSun: { value: sun }, uMoon: { value: this.moon }, uOpacity: { value: 1 } },
       transparent: true,
       depthWrite: false,
     });
@@ -68,16 +68,6 @@ export class Planet {
     this.atmosphere = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), this.atmosphereMaterial);
     this.atmosphere.scale.setScalar(ATMOSPHERE_OUTER);
     this.atmosphere.renderOrder = 6;
-
-    this.starsMaterial = new THREE.ShaderMaterial({
-      ...logDepth(starsVertex, starsFragment),
-      uniforms: { uPixelRatio: { value: pixelRatio }, uOpacity: { value: 1 } },
-      transparent: true,
-      depthWrite: false,
-    });
-    this.stars = new THREE.Points(makeStarsGeometry(5200, 3000), this.starsMaterial);
-    this.stars.renderOrder = -1;
-    this.stars.frustumCulled = false;
   }
 
   setSun(lat: number, lon: number) {
@@ -104,10 +94,6 @@ export class Planet {
 
   setLights(v: number) {
     this.earthMaterial.uniforms.uLights.value = v;
-  }
-
-  setStarsOpacity(v: number) {
-    this.starsMaterial.uniforms.uOpacity.value = v;
   }
 
   /** Country borders and coastlines from quantised Natural Earth polylines. */
@@ -146,53 +132,6 @@ export class Planet {
     this.cloudsMaterial.dispose();
     this.atmosphere.geometry.dispose();
     this.atmosphereMaterial.dispose();
-    this.stars.geometry.dispose();
-    this.starsMaterial.dispose();
     for (const slot of ["uDay", "uNight", "uWater", "uClouds"]) (this.earthMaterial.uniforms[slot].value as THREE.Texture).dispose();
   }
-}
-
-/** Procedural sky: a few bright stars, many faint ones, a hint of the galactic band. */
-export function makeStarsGeometry(count: number, radius: number) {
-  const pos = new Float32Array(count * 3);
-  const mag = new Float32Array(count);
-  const color = new Float32Array(count * 3);
-  let seed = 7;
-  const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
-  const tints = [
-    [0.75, 0.82, 1.0],
-    [1.0, 1.0, 1.0],
-    [1.0, 0.93, 0.82],
-    [1.0, 0.8, 0.62],
-  ];
-  for (let i = 0; i < count; i++) {
-    let u = rand() * 2 - 1;
-    const t = rand() * Math.PI * 2;
-    // Bias a third of the stars toward a tilted band.
-    if (i % 3 === 0) u = u * 0.18;
-    const s = Math.sqrt(1 - u * u);
-    const v = new THREE.Vector3(s * Math.cos(t), u, s * Math.sin(t)).applyAxisAngle(new THREE.Vector3(1, 0, 0.3).normalize(), 1.05);
-    pos.set([v.x * radius, v.y * radius, v.z * radius], i * 3);
-    mag[i] = Math.pow(rand(), 9);
-    color.set(tints[Math.floor(rand() * tints.length)], i * 3);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  g.setAttribute("aMag", new THREE.BufferAttribute(mag, 1));
-  g.setAttribute("aColor", new THREE.BufferAttribute(color, 3));
-  return g;
-}
-
-/** A ready-to-add star field for another scene. */
-export function makeStars(count: number, radius: number): THREE.Points {
-  const material = new THREE.ShaderMaterial({
-    ...logDepth(starsVertex, starsFragment),
-    uniforms: { uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) }, uOpacity: { value: 1 } },
-    transparent: true,
-    depthWrite: false,
-  });
-  const points = new THREE.Points(makeStarsGeometry(count, radius), material);
-  points.frustumCulled = false;
-  points.renderOrder = -1;
-  return points;
 }

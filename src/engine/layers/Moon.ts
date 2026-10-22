@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { rotateY, type Vec3 } from "@/lib/geo";
 import { EARTH_RADIUS_AU, moonPosition, toScene } from "@/lib/orbits";
-import { bodyFragment, bodyVertex, logDepth } from "../shaders";
+import { bodyVertex, logDepth, moonFragment } from "../shaders";
 
 /** Mean lunar radius in Earth radii. */
 export const MOON_RADIUS = 1737.4 / 6371;
@@ -14,13 +14,15 @@ export class Moon {
 
   constructor(sun: THREE.Vector3) {
     this.material = new THREE.ShaderMaterial({
-      ...logDepth(bodyVertex, bodyFragment),
+      ...logDepth(bodyVertex, moonFragment),
       uniforms: {
         uMap: { value: null },
         uSun: { value: sun },
         uAmbient: { value: 0.015 },
         uEmissive: { value: 0 },
         uOpacity: { value: 1 },
+        uEarthPos: { value: new THREE.Vector3() },
+        uEarthRadius: { value: 1 },
       },
     });
     this.mesh = new THREE.Mesh(new THREE.SphereGeometry(MOON_RADIUS, 96, 48), this.material);

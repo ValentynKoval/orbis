@@ -94,6 +94,21 @@ On this PC `next build` may need `NODE_OPTIONS=--max-old-space-size=4096`. Stop 
   transit: the floating origin slides from one body to the other while the camera pulls back and dives.
 - Solar system (`engine/SolarSystem.ts`): separate scene in AU with a floating origin at the focused body. `lib/orbits.ts` has the
   `lib/orbits.ts` has the ephemerides (JPL planet elements, Meeus Moon, Kepler solver for JPL small-body elements), all unit-tested.
+- Tiles (`engine/layers/Tiles.ts`) load target-first (walk to the needed level, want leaves, draw any loaded
+  ancestor underneath, sunk by `uSink`), cancel requests unwanted for 1.2 s, decode with createImageBitmap
+  (rows stay north-first: mesh v is flipped, textures use flipY = false). Terrain grids come from
+  `/api/terrain/{z}/{x}/{y}` (33×33 Int16, decoded from Terrarium with sharp, CDN-cached a year); one grid at
+  level z−2 (8…13) serves 16 imagery tiles (`lib/terrain.ts`). `public/sw.js` caches tiles between visits (prod only).
+- Camera tilt (`CameraRig.tilt/heading`): automatic lean below ~550 km plus the visitor's (right/Ctrl-drag, Q/E, R/F,
+  N resets). The view pivots on the ground under the pose (`rig.ground`); Engine raises `minDist` by 1/cos(tilt).
+- The sky (`engine/layers/Celestial.ts`): `public/data/stars.bin`, `constellations.json`, `textures/milkyway-*.jpg`
+  built by `scripts/build-sky.mjs` (d3-celestial BSD, NASA SVS 4851). Equatorial frame; Milky Way map has RA 0 at
+  the centre increasing left. In the system scene the sky group follows the camera.
+- Eclipses: `lib/eclipses.ts` (tested against NASA's canon), shaders `ECLIPSE` (Moon's shadow on surface and
+  clouds via `uMoon`) and `moonFragment` (Earth's umbra, `uEarthPos/uEarthRadius`). The Earth-scene clock may run
+  into the future; only a replay that started in the past hands back to live.
+- Landmarks: `lib/places.ts` + `places.items` in the dictionaries; pins are positioned per frame by
+  `components/PlaceLabels.tsx` via `engine.watchPlaces`. Taps on bare ground select `{kind:"point"}` → `/api/point`.
 - Labels for bodies (`components/BodyLabels.tsx`) are one component for both scenes, laid out by `lib/labels.ts`
   (priority order, four candidate spots, hide when nothing fits). HUD groups fade with `.hud-fade` instead of unmounting.
 - The renderer uses a logarithmic depth buffer: every ShaderMaterial wraps its shaders with `logDepth()`.

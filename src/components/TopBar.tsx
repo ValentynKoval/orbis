@@ -4,10 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LOCALE_COOKIE, type Locale } from "@/i18n/config";
 import { useDict, useLocale } from "@/i18n/client";
-import { formatUtc } from "@/lib/format";
 import { OrbisMark, Wave } from "./icons";
 import { useOrbis } from "@/store/orbis";
-import { useNow } from "./hooks";
+import { useClockFormat, useNow, useTimeZoneSetup } from "./hooks";
 
 function switchPath(pathname: string, to: Locale) {
   const parts = pathname.split("/");
@@ -27,9 +26,13 @@ export function TopBar({ live = false }: { live?: boolean }) {
   const isLive = useOrbis((s) => s.time.live);
   const engine = useOrbis((s) => s.engine);
   const shown = isLive ? now : (engine?.clock.now() ?? now);
+  const clock = useClockFormat();
+  const toggleUtc = useOrbis((s) => s.toggleUtc);
+  const utc = useOrbis((s) => s.utc);
+  useTimeZoneSetup();
 
   return (
-    <header className="pointer-events-none fixed inset-x-0 top-0 z-20 flex justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))]">
+    <header className={`pointer-events-none fixed inset-x-0 top-0 z-20 flex justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] ${live ? "lg:justify-start" : ""}`}>
       <nav className="bezel pointer-events-auto flex items-center rounded-full p-1">
         <div className="bezel-core flex items-center gap-1 rounded-full py-1 pr-1 pl-3 sm:gap-2">
           <Link href={`/${locale}`} aria-label={t.nav.home} className="flex items-center gap-2 rounded-full pr-2">
@@ -37,15 +40,21 @@ export function TopBar({ live = false }: { live?: boolean }) {
             <span className="font-display text-sm font-medium tracking-tight">Orbis</span>
           </Link>
           {live && (
-            <span className="readout hidden items-center gap-2 border-l border-hairline px-3 text-xs text-haze sm:flex">
+            <span className="readout pointer-events-auto hidden items-center gap-2 border-l border-hairline px-3 text-xs text-haze sm:flex">
               <span className="relative flex size-1.5">
                 {isLive && <span className="absolute inline-flex size-full animate-ping rounded-full bg-seismic/70" />}
                 <span className={`relative inline-flex size-1.5 rounded-full ${isLive ? "bg-seismic" : "bg-foil"}`} />
               </span>
               <span className="text-lunar">{isLive ? t.hud.live : t.timeline.replay}</span>
-              <span suppressHydrationWarning>
-                {formatUtc(shown, locale, isLive ? false : true)} {t.hud.utc}
-              </span>
+              <button
+                type="button"
+                onClick={toggleUtc}
+                title={utc ? t.hud.showLocal : t.hud.showUtc}
+                className="readout rounded-full transition-colors duration-300 hover:text-lunar"
+                suppressHydrationWarning
+              >
+                {`${clock.time(shown, !isLive)} ${clock.label(shown)}`}
+              </button>
             </span>
           )}
           <button
