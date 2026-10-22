@@ -59,15 +59,19 @@ export const EOX: ImageryProvider = {
   url: (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2024_3857/default/g/${z}/${y}/${x}.jpg`,
 };
 
-/** Esri World Imagery through ArcGIS Location Platform (free tier, key restricted by referrer): sub-metre. */
+/**
+ * Esri World Imagery through ArcGIS Location Platform (free tier, key restricted by referrer): sub-metre.
+ * The World_Imagery MapServer endpoint is used on purpose: keys from new Location Platform accounts are
+ * rejected by the Static Basemap Tiles service (498 "Token Invalid", an Esri-side bug open since 2026-08)
+ * but accepted here, and both bill as basemap tiles.
+ */
 export function esriImagery(apiKey: string): ImageryProvider {
   return {
     id: "esri",
     minLevel: 14,
     maxLevel: 19,
     attribution: "Esri World Imagery: Esri, Vantor, Earthstar Geographics, and the GIS User Community",
-    url: (z, x, y) =>
-      `https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/imagery/static/tile/${z}/${y}/${x}?token=${apiKey}`,
+    url: (z, x, y) => `https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}?token=${apiKey}`,
   };
 }
 

@@ -76,7 +76,10 @@ On this PC `next build` may need `NODE_OPTIONS=--max-old-space-size=4096`. Stop 
   (satellites, stars) live in a group rotated by −GMST.
 - Imagery tiles (`engine/layers/Tiles.ts`, `lib/tiles.ts`): Web Mercator quadtree over the base globe, refined by
   screen-space error; a parent stays drawn while children fade in. Providers: EOX (levels 2–13, keyless, CC BY-NC-SA)
-  and Esri via `NEXT_PUBLIC_ARCGIS_KEY` (14–19). Never use Esri or Bing tiles without a key: their terms forbid it.
+  and Esri via `NEXT_PUBLIC_ARCGIS_KEY` (14–19, World_Imagery MapServer: the Static Basemap Tiles service rejects keys
+  from new Location Platform accounts, an open Esri bug). Never use Esri or Bing tiles without a key: their terms forbid it.
+  Valentyn's key: ArcGIS Location Platform org `valentyn.maps.arcgis.com`, credential item "Orbis"; Referrers
+  `https://orbis-live.vercel.app` and `http://localhost:3200`; changing referrers or privileges invalidates the key → regenerate and update the Vercel env.
   Tiles share the planet shader's uniforms, so lighting and clouds match the base sphere.
 - Terrain: `Tiles` with `terrain: true` samples Terrarium PNGs (levels ≥ 8, max 15) at the 13×13 grid and raises
   vertices by `TERRAIN_EXAGGERATION`; `heightAt()` feeds the camera floor every frame. Overlays (rain radar) are a
