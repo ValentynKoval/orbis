@@ -17,7 +17,8 @@ export async function dispatchAis(token: string): Promise<void> {
     method: "POST",
     headers: {
       Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
+      // A secret piped in from Windows PowerShell 5.1 starts with a BOM (GitHub then answers 401); trim() drops it.
+      Authorization: `Bearer ${token.trim()}`,
       "Content-Type": "application/json",
       "User-Agent": "Orbis/1.0 (+https://github.com/ValentynKoval/orbis)",
       "X-GitHub-Api-Version": "2022-11-28",

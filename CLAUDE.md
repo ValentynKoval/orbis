@@ -36,7 +36,10 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
 - **GitHub's own cron is not a clock for public repos**: `*/10` gave three runs a day (≈600 ships on the globe). The worker's
   cron (`*/5`, `scheduled` in `relay/src/index.ts`) dispatches `ais.yml` on every other tick via `workflow_dispatch`
   (`relay/src/ais.ts`, worker secret `GH_DISPATCH_TOKEN`: a fine-grained PAT, repository `orbis` only, Actions read/write).
-  Without the secret nothing is dispatched and only the hourly backstop schedule in `ais.yml` runs. Cost: 144 subrequests and
+  Without the secret nothing is dispatched and only the hourly backstop schedule in `ais.yml` runs.
+  The cron itself silently never fired from 21 to 23.10 (hub stayed up on its alarm); `npx wrangler triggers deploy` revived it.
+  If `gh run list --workflow ais.yml` shows no `workflow_dispatch` runs, check `wrangler tail` for `"*/5 * * * *"` lines first.
+  Put secrets from Git Bash (`printf '%s' … | wrangler secret put`): Windows PowerShell 5.1 pipes add a BOM. Cost: 144 subrequests and
   ~5 runner-hours a day (public repo, free); no extra Durable Object requests.
 - Only requests with `x-orbis-key: RELAY_TOKEN` are served; Vercel holds the token (`RELAY_URL`, `RELAY_TOKEN` env).
   Secrets on the worker: `RELAY_TOKEN`, `GH_DISPATCH_TOKEN` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
