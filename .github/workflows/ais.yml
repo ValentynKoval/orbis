@@ -5,9 +5,13 @@ name: Collect ships
 # counts as a request), so a short listen runs here instead: about a minute of
 # the stream every ten minutes, written to a release asset the relay ingests.
 # Vessels keep moving between snapshots by dead reckoning in the browser.
+#
+# GitHub's cron for public repositories ran this three times a day instead of
+# every ten minutes, so the relay worker's cron dispatches it (relay/src/ais.ts,
+# secret GH_DISPATCH_TOKEN). The hourly schedule is only a backstop.
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:

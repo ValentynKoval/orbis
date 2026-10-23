@@ -30,10 +30,16 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
 - **Never hold the aisstream.io WebSocket in the Durable Object.** Every incoming message counts as a request and the
   free tier (100k/day) was exhausted by midday (error 1101 "Exceeded allowed volume of requests"), killing planes too.
   Ships now come from `.github/workflows/ais.yml`: every 10 min `scripts/collect-ais.mjs` listens for 100 s and uploads
-  `ships.json.gz` to the GitHub release `ais` (`--clobber`, no git history growth); the hub downloads it. The AIS key is a
+  `ships.json.gz` to the GitHub release `ais` (`--clobber`, no git history growth); the hub downloads it every 5 min and keeps
+  a vessel for 1 h (`STALE_S`), so the ship count depends on snapshots arriving on time. The AIS key is a
   repository secret (`AISSTREAM_API_KEY`); the `ais` release is a data container, not a software release.
+- **GitHub's own cron is not a clock for public repos**: `*/10` gave three runs a day (≈600 ships on the globe). The worker's
+  cron (`*/5`, `scheduled` in `relay/src/index.ts`) dispatches `ais.yml` on every other tick via `workflow_dispatch`
+  (`relay/src/ais.ts`, worker secret `GH_DISPATCH_TOKEN`: a fine-grained PAT, repository `orbis` only, Actions read/write).
+  Without the secret nothing is dispatched and only the hourly backstop schedule in `ais.yml` runs. Cost: 144 subrequests and
+  ~5 runner-hours a day (public repo, free); no extra Durable Object requests.
 - Only requests with `x-orbis-key: RELAY_TOKEN` are served; Vercel holds the token (`RELAY_URL`, `RELAY_TOKEN` env).
-  Secrets on the worker: `RELAY_TOKEN` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
+  Secrets on the worker: `RELAY_TOKEN`, `GH_DISPATCH_TOKEN` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
 - OpenSky is not used: it does not answer requests from Cloudflare or Vercel (AWS) networks. Aircraft come from
   adsb.lol (ODbL), which must stay credited on the Sources page.
 - The `data` branch is refreshed by `.github/workflows/data.yml` every 2 h: CelesTrak element sets and the cloud mask

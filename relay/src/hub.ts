@@ -7,6 +7,8 @@ import { ShipStore, type PositionUpdate, type ShipUpdates, type StaticUpdate } f
 export interface Env {
   HUB: DurableObjectNamespace<Hub>;
   RELAY_TOKEN: string;
+  /** GitHub token allowed to dispatch workflows on this repo (the ships collector). */
+  GH_DISPATCH_TOKEN?: string;
 }
 
 /** One aircraft list every 90 s: fresh enough with client-side extrapolation, gentle on adsb.lol. */

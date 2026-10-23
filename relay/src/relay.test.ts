@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPlaneSnapshot } from "../../src/lib/feeds/adsb";
+import { aisDispatchDue } from "./ais";
 import { ShipKind, shipKind } from "../../src/lib/feeds/live";
 import { parseAisMessage, ShipStore } from "../../src/lib/feeds/ships";
 
@@ -67,5 +68,15 @@ describe("AIS", () => {
       ShipKind.Service,
       ShipKind.Other,
     ]);
+  });
+});
+
+describe("ships collector dispatch", () => {
+  it("fires on every other five-minute cron tick", () => {
+    const at = (iso: string) => Date.parse(iso);
+    expect(aisDispatchDue(at("2026-10-23T14:00:00Z"))).toBe(true);
+    expect(aisDispatchDue(at("2026-10-23T14:05:00Z"))).toBe(false);
+    expect(aisDispatchDue(at("2026-10-23T14:10:00.250Z"))).toBe(true);
+    expect(aisDispatchDue(at("2026-10-23T14:55:00Z"))).toBe(false);
   });
 });

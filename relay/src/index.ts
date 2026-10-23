@@ -1,3 +1,4 @@
+import { aisDispatchDue, dispatchAis } from "./ais";
 import { Hub, type Env } from "./hub";
 
 export { Hub };
@@ -16,8 +17,11 @@ export default {
     return hub.fetch(request);
   },
 
-  /** Keeps the hub alive and its alarm armed even if nobody has visited for a while. */
-  async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+  /** Keeps the hub alive and its alarm armed, and starts the ships collector every ten minutes. */
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (env.GH_DISPATCH_TOKEN && aisDispatchDue(event.scheduledTime)) {
+      ctx.waitUntil(dispatchAis(env.GH_DISPATCH_TOKEN).catch((err) => console.error("ais dispatch", err instanceof Error ? err.message : err)));
+    }
     const hub = env.HUB.get(env.HUB.idFromName("global"));
     await hub.fetch("https://hub/health");
   },
