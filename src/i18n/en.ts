@@ -533,6 +533,10 @@ export const en = {
         body: "Two scenes share one camera language. Near the Earth a Web Mercator quadtree streams imagery tiles onto the shaded globe, refined by screen-space error, with parents kept underneath while children fade in. Past the Moon the view hands over to a heliocentric scene measured in astronomical units with a floating origin at whichever body you orbit, so Saturn's rings and a 0.3 m street tile both render without precision artefacts. A logarithmic depth buffer covers the whole range.",
       },
       {
+        title: "Weather on the GPU",
+        body: "NOAA's GFS wind arrives as GRIB2 with complex packing and second-order spatial differencing; a 160-line reader written for the site decodes it in the data workflow, and the browser gets a 100 KB texture. Tens of thousands of particles are advected through it in a fragment shader, their positions packed into 8-bit channel pairs so any WebGL device can run it; a ring of history slices records their recent path, and each tail is drawn as real line segments on a shell around the planet, culled on the GPU when it is off screen or behind the Earth. The sky itself is single Rayleigh and Mie scattering, ray-marched per pixel and calibrated against the surface lighting, then laid over the frame as a veil of its own colour. Tropical cyclones come from GDACS with their forecast cones and move along their tracks with the timeline.",
+      },
+      {
         title: "Time and the analyst",
         body: "Everything reads one simulated clock, so the timeline can move the Sun, re-propagate every satellite, fade quakes and fires, and swap in recorded traffic frames. The analyst runs a tool-calling loop on Gemini: it queries live aircraft, ships, quakes, fires and satellite positions on the server, answers in the visitor's language, and returns camera moves the browser performs.",
       },
@@ -545,6 +549,8 @@ export const en = {
       ["Free bandwidth is counted before compression", "Relay responses are gzipped inside the function and cached for one relay cycle, keeping origin transfer inside the free allowance."],
       ["The build hung on a WebAssembly re-export", "The SGP4 worker imports only the plain-JS modules of satellite.js, bypassing the package entry."],
       ["Free sub-metre imagery is rare", "Keyless Esri and Bing tiles work but their terms forbid it; Google and Mapbox want a card. The site uses EOX Sentinel-2 (10 m, keyless, non-commercial) everywhere and Esri World Imagery through ArcGIS Location Platform's free tier, with the key restricted to the domain."],
+      ["NOAA's OPeNDAP server is gone", "GFS is now only served as GRIB2, so the site carries its own decoder for the packing NOAA uses, checked against two differently cut files to the last bit."],
+      ["A washed-out sky", "Light added to an already display-encoded frame turned a sunlit desert white. The atmosphere now blends as a veil whose opacity is the light it hides, and its sample points are jittered so the steps never show as arcs."],
       ["One always-on object, and only one", "An outbound WebSocket keeps the Durable Object awake around the clock: about 10,800 of the 13,000 free GB-seconds a day."],
     ],
     stackTitle: "Stack",
