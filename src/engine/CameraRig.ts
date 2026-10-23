@@ -69,6 +69,8 @@ export class CameraRig {
     el.addEventListener("pointermove", this.handleMove);
     el.addEventListener("pointerup", this.handleUp);
     el.addEventListener("pointercancel", this.handleUp);
+    // A drag can lose its capture without a pointerup (a context menu, a window switch); it must still end.
+    el.addEventListener("lostpointercapture", this.handleUp);
     el.addEventListener("wheel", this.handleWheel, { passive: false });
     el.addEventListener("contextmenu", this.handleContextMenu);
     window.addEventListener("keydown", this.handleKey);
@@ -79,6 +81,7 @@ export class CameraRig {
     this.el.removeEventListener("pointermove", this.handleMove);
     this.el.removeEventListener("pointerup", this.handleUp);
     this.el.removeEventListener("pointercancel", this.handleUp);
+    this.el.removeEventListener("lostpointercapture", this.handleUp);
     this.el.removeEventListener("wheel", this.handleWheel);
     this.el.removeEventListener("contextmenu", this.handleContextMenu);
     window.removeEventListener("keydown", this.handleKey);
@@ -265,7 +268,10 @@ export class CameraRig {
       const range = Math.max(1e-6, this.pose.dist - ground);
       const a = THREE.MathUtils.degToRad(this.tilt);
       this.camera.position.copy(target).addScaledVector(up, range * Math.cos(a)).addScaledVector(forward, -range * Math.sin(a));
-      this.camera.up.copy(up);
+      // Screen-up lies in the plane of the view and the local vertical, perpendicular to the view: the heading at
+      // the top of the screen when looking straight down, the sky when leaning back. (Using the local vertical
+      // itself would be parallel to the view at zero tilt, and lookAt would spin the picture at random.)
+      this.camera.up.copy(up).multiplyScalar(Math.sin(a)).addScaledVector(forward, Math.cos(a));
       this.camera.lookAt(target);
     }
     if (Math.abs(this.offset) > 1e-4 || Math.abs(this.offsetY) > 1e-4) {
