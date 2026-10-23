@@ -33,7 +33,8 @@ import { EARTH_RADIUS_AU } from "@/lib/orbits";
 import type { BodyRecord } from "@/lib/feeds/bodies";
 import type { SpacecraftTrack } from "@/lib/feeds/horizons";
 import { EOX, esriImagery, rainRadar, type ImageryProvider } from "@/lib/tiles";
-import { reticleFragment, reticleVertex, logDepth } from "./shaders";
+import { loadTexture, UploadQueue } from "./textures";
+import { groundReticleFragment, groundReticleVertex, reticleFragment, reticleVertex, logDepth } from "./shaders";
 import type { FeedKey, LayerKey, Selection } from "./types";
 
 const REFRESH_MS: Record<FeedKey, number> = {
@@ -58,6 +59,12 @@ const EXIT_RADII = HANDOVER_RADII / 1.01;
 const EARTH_MAX_RADII = HANDOVER_RADII * 1.5;
 /** The heliocentric overview: the inner planets in one view. */
 const OVERVIEW = { lat: 32, distAu: 2.6 };
+/** The ground reticle's quad faces +Z. */
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+/** How long the opening swing-in plays; big texture uploads wait until it is over. */
+const ENTRANCE_MS = 2800;
+/** Geometry for compiling materials that no object uses yet. */
+const STAND_IN = new THREE.PlaneGeometry(1e-6, 1e-6);
 
 export interface Overhead {
   at: number;
@@ -110,6 +117,12 @@ export class Engine {
   private lastQualityCheck = 0;
   private reticle: THREE.Points;
   private reticleMaterial: THREE.ShaderMaterial;
+  /** The reticle for spots on the ground (places, quakes, tapped points, storms): a ring lying on the terrain. */
+  private groundReticle: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  /** Big textures go to the GPU one per frame slot (see textures.ts). */
+  private uploads: UploadQueue;
+  /** The day's cloud mask is on the globe (the bundled fallback must not replace it). */
+  private cloudsLive = false;
   private observer: ResizeObserver;
   private width = 1;
   private height = 1;
@@ -135,6 +148,9 @@ export class Engine {
       logarithmicDepthBuffer: true,
     });
     this.renderer.setClearColor(0x000000, 1);
+    // Reading back link status after every compile blocks until the driver is done; the shaders are known good.
+    this.renderer.debug.checkShaderErrors = process.env.NODE_ENV !== "production";
+    this.uploads = new UploadQueue(this.renderer);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
     const pixelRatio = Math.min(window.devicePixelRatio || 1, options.lite ? 1.75 : 2);
@@ -184,6 +200,19 @@ export class Engine {
     this.reticle.visible = false;
     this.reticle.frustumCulled = false;
     this.reticle.renderOrder = 10;
+    this.groundReticle = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        ...logDepth(groundReticleVertex, groundReticleFragment),
+        uniforms: { uColor: { value: new THREE.Color("#f2c14e") }, uClock: { value: 0 }, uOpacity: { value: 1 } },
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    this.groundReticle.visible = false;
+    this.groundReticle.frustumCulled = false;
+    this.groundReticle.renderOrder = 10;
 
     this.inertial.add(this.celestial.group, this.satellites.points, this.satellites.orbit);
     this.scene.add(this.sky.sun, this.sky.markers);
@@ -205,6 +234,7 @@ export class Engine {
       this.traffic.track,
       this.planet.atmosphere,
       this.reticle,
+      this.groundReticle,
     );
 
     const layers = useOrbis.getState().layers;
@@ -244,21 +274,18 @@ export class Engine {
 
   /** Loads base textures (reporting progress), then starts rendering and pulling feeds. */
   async start() {
-    const loader = new THREE.TextureLoader();
     const anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     const month = String(new Date(this.clock.now()).getUTCMonth() + 1).padStart(2, "0");
     const size = this.textureSize;
     type Slot = "uDay" | "uNight" | "uWater" | "uClouds";
-    const load = async (url: string, slot: Slot, color: boolean) => {
-      const texture = await loader.loadAsync(url);
+    const map = async (url: string, color: boolean) => {
+      const texture = await loadTexture(url);
       texture.colorSpace = color ? THREE.SRGBColorSpace : THREE.NoColorSpace;
       texture.anisotropy = anisotropy;
       texture.wrapS = THREE.RepeatWrapping;
-      if (this.disposed) return texture.dispose();
-      this.planet.setTexture(slot, texture);
-      this.renderer.initTexture(texture);
+      return texture;
     };
-    // First paint with small maps (~200 KB); the full-size ones replace them as they arrive.
+    // First paint with small maps (~200 KB); the full-size ones replace them after the entrance.
     const quick: [string, Slot, boolean][] = [
       [`/textures/day-${month}-1k.jpg`, "uDay", true],
       ["/textures/night-1k.jpg", "uNight", false],
@@ -267,49 +294,94 @@ export class Engine {
     let done = 0;
     await Promise.all(
       quick.map(async ([url, slot, color]) => {
-        await load(url, slot, color);
+        const texture = await map(url, color);
+        if (this.disposed) return texture.dispose();
+        this.planet.setTexture(slot, texture);
+        this.renderer.initTexture(texture);
         done++;
         useOrbis.setState({ progress: done / quick.length });
       }),
     );
     if (this.disposed) return;
-    this.renderer.compile(this.scene, this.camera);
+    await this.compileAll(this.scene, this.camera, [this.tiles.material, this.rain.material]);
+    if (this.disposed) return;
     this.renderer.setAnimationLoop(this.frame);
     useOrbis.setState({ ready: true });
-    (async () => {
-      await load(`/textures/day-${month}-${size}.jpg`, "uDay", true);
-      await load(`/textures/night-${size}.jpg`, "uNight", false);
-      await load("/textures/clouds-fallback-2k.jpg", "uClouds", false);
-    })().catch(() => undefined);
 
-    this.celestial.load(this.options.lite ? "2k" : "4k").catch(() => undefined);
-    loader
-      .loadAsync("/textures/sun-1k.jpg")
+    // Everything below arrives while the Earth swings in; the GPU gets it one map at a time once it has.
+    this.uploads.hold(ENTRANCE_MS);
+    const upgrade = (url: string, slot: Slot, color: boolean) =>
+      map(url, color).then((texture) => {
+        if (this.disposed) return texture.dispose();
+        // The live cloud mask may have come first: the fallback never replaces it.
+        this.uploads.push(texture, () => (slot === "uClouds" && this.cloudsLive ? texture.dispose() : this.planet.setTexture(slot, texture)));
+      });
+    (async () => {
+      await upgrade(`/textures/day-${month}-${size}.jpg`, "uDay", true);
+      await upgrade(`/textures/night-${size}.jpg`, "uNight", false);
+      await upgrade("/textures/clouds-fallback-2k.jpg", "uClouds", false);
+    })().catch(() => undefined);
+    this.celestial.load(this.options.lite ? "2k" : "4k", this.uploads).catch(() => undefined);
+    loadTexture("/textures/sun-1k.jpg")
       .then((texture) => {
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.wrapS = THREE.RepeatWrapping;
-        if (!this.disposed) this.sky.setSunTexture(texture);
+        if (!this.disposed) this.uploads.push(texture, () => this.sky.setSunTexture(texture));
       })
       .catch(() => undefined);
-    new THREE.TextureLoader()
-      .loadAsync("/textures/moon-2k.jpg")
+    loadTexture("/textures/moon-2k.jpg")
       .then((texture) => {
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.anisotropy = anisotropy;
-        if (!this.disposed) this.moon.setTexture(texture);
+        if (!this.disposed) this.uploads.push(texture, () => this.moon.setTexture(texture));
       })
       .catch(() => undefined);
-    this.schedule("satellites", () => this.loadSatellites());
-    this.schedule("planes", () => this.loadPlanes());
-    this.schedule("ships", () => this.loadShips());
-    this.schedule("quakes", () => this.loadQuakes());
-    this.schedule("storms", () => this.loadStorms());
-    this.schedule("fires", () => this.loadFires());
-    this.schedule("clouds", () => this.loadClouds());
-    this.schedule("aurora", () => this.loadAurora());
-    this.schedule("rain", () => this.loadRain());
+    // Feeds start a beat apart: each one parses and uploads its buffers, and together they cost several frames.
+    const feeds: [FeedKey, () => Promise<void>][] = [
+      ["satellites", () => this.loadSatellites()],
+      ["quakes", () => this.loadQuakes()],
+      ["planes", () => this.loadPlanes()],
+      ["storms", () => this.loadStorms()],
+      ["ships", () => this.loadShips()],
+      ["fires", () => this.loadFires()],
+      ["clouds", () => this.loadClouds()],
+      ["aurora", () => this.loadAurora()],
+      ["rain", () => this.loadRain()],
+    ];
+    for (const [key] of feeds) if (useOrbis.getState().feeds[key].status === "idle") setFeed(key, { status: "loading" });
+    feeds.forEach(([key, load], i) => this.timers.push(window.setTimeout(() => this.schedule(key, load), i * 140)));
     if (useOrbis.getState().layers.wind) this.scheduleWind();
     this.loadBorders();
+    // The heliocentric scene is ready before anyone zooms out to it: shaders compiled and, on desktops, its maps
+    // and bodies loaded, so the hand-over never waits for them.
+    this.timers.push(
+      window.setTimeout(() => {
+        void this.compileAll(this.system.scene, this.system.camera);
+        if (!this.options.lite) this.ensureSystemAssets();
+      }, ENTRANCE_MS + 4000),
+    );
+  }
+
+  /**
+   * Compiles every shader a scene can use, hidden layers included, without blocking: the driver links them in
+   * parallel where it can (KHR_parallel_shader_compile) instead of stalling the frame that first draws them.
+   * `extra` are materials no object uses yet (tiles are made on demand).
+   */
+  private async compileAll(scene: THREE.Scene, camera: THREE.Camera, extra: THREE.Material[] = []) {
+    const hidden: THREE.Object3D[] = [];
+    scene.traverse((o) => {
+      if (!o.visible) {
+        hidden.push(o);
+        o.visible = true;
+      }
+    });
+    const stand = extra.map((m) => new THREE.Mesh(STAND_IN, m));
+    for (const m of stand) scene.add(m);
+    // Programs are created synchronously inside compileAsync; only the wait for the driver is deferred.
+    const ready = this.renderer.compileAsync(scene, camera).catch(() => undefined);
+    for (const m of stand) scene.remove(m);
+    for (const o of hidden) o.visible = false;
+    await ready;
   }
 
   dispose() {
@@ -317,6 +389,7 @@ export class Engine {
     window.clearInterval(this.historyTimer);
     this.renderer.setAnimationLoop(null);
     this.timers.forEach((t) => window.clearTimeout(t));
+    this.uploads.clear();
     this.observer.disconnect();
     this.rig.dispose();
     this.planet.dispose();
@@ -336,6 +409,8 @@ export class Engine {
     this.ambience.dispose();
     this.reticleMaterial.dispose();
     this.reticle.geometry.dispose();
+    this.groundReticle.geometry.dispose();
+    this.groundReticle.material.dispose();
     this.renderer.dispose();
   }
 
@@ -371,7 +446,8 @@ export class Engine {
     this.storms.select(selection?.kind === "storm" ? selection.id : null);
     this.traffic.clearTrack();
     if (selection?.kind === "plane" || selection?.kind === "ship") this.loadTrack(selection);
-    this.reticle.visible = !!selection;
+    // The next frame shows the right reticle for the kind (on the ground or in the air).
+    this.reticle.visible = this.groundReticle.visible = false;
     this.lastDetail = 0;
     if (selection) this.ambience.ping();
   }
@@ -659,6 +735,7 @@ export class Engine {
     this.clockSeconds += dt;
     const sim = this.clock.now();
 
+    this.uploads.pump(now);
     if (this.space === "system") {
       this.systemFrame(sim, dt, now);
       return;
@@ -732,7 +809,8 @@ export class Engine {
 
   private systemFrame(sim: number, dt: number, now: number) {
     const s = this.system;
-    s.celestial.setOpacity(1, this.opacity.constellations.value);
+    // Out among the planets the figures are background: faint, so orbits and names read first.
+    s.celestial.setOpacity(1, this.opacity.constellations.value * 0.45);
     s.update(sim, dt, this.width, this.height);
     // Back inside the hand-over point, still heading in and settled on the Earth: the Earth scene takes over mid-motion.
     if (s.focus.kind === "major" && s.focus.id === "earth" && !s.inTransit && s.rig.pose.dist < EXIT_RADII * EARTH_RADIUS_AU && s.rig.goal.dist <= s.rig.pose.dist) {
@@ -835,7 +913,7 @@ export class Engine {
 
   private ensureSystemAssets() {
     this.systemAssets ??= (async () => {
-      await this.system.loadTextures(this.options.lite);
+      await this.system.loadTextures(this.options.lite, this.uploads);
       const res = await fetch("/api/bodies");
       if (!res.ok) throw new Error(`bodies ${res.status}`);
       const data: { comets: BodyRecord[]; asteroids: BodyRecord[] } = await res.json();
@@ -937,7 +1015,8 @@ export class Engine {
    * close, tilted view and never sinks into a ridge from afar.
    */
   private surfacePoint(lat: number, lon: number): Vec3 {
-    const ground = Math.max(0, this.tiles.heightAt(lat, lon)) / 6_371_000;
+    // From high up the lift (kilometres) dwarfs what relief changes on screen: skip the grid lookups.
+    const ground = this.rig.pose.dist < 1.3 ? Math.max(0, this.tiles.heightAt(lat, lon)) / 6_371_000 : 0;
     const lift = THREE.MathUtils.clamp((this.rig.pose.dist - 1) * 0.0015, 3e-6, 0.003);
     return latLonToVec(lat, lon, 1 + ground + lift);
   }
@@ -945,14 +1024,54 @@ export class Engine {
   private updateReticle(sim: number) {
     this.reticleMaterial.uniforms.uClock.value = this.clockSeconds;
     const p = this.selectionPosition(sim);
-    if (!p) {
-      this.reticle.visible = false;
+    const kind = useOrbis.getState().selection?.kind;
+    const ground = kind === "quake" || kind === "storm" || kind === "place" || kind === "point";
+    this.reticle.visible = !!p && !ground;
+    this.groundReticle.visible = !!p && ground;
+    if (!p) return;
+    if (ground) {
+      this.layGroundReticle(p, kind !== "storm");
       return;
     }
-    this.reticle.visible = true;
     const attr = this.reticle.geometry.getAttribute("position") as THREE.BufferAttribute;
     attr.setXYZ(0, p[0], p[1], p[2]);
     attr.needsUpdate = true;
+  }
+
+  /**
+   * Lays the ground reticle on the terrain at `p`, about 52 px across at any distance: from straight above it is
+   * a circle, from a tilted view an ellipse that shows the angle of the ground. `terrain` follows the slope
+   * (storms sit on the cloud deck, which is level).
+   */
+  private layGroundReticle(p: Vec3, terrain: boolean) {
+    const m = this.groundReticle;
+    m.material.uniforms.uClock.value = this.clockSeconds;
+    m.position.set(p[0], p[1], p[2]);
+    const cam = this.camera.position;
+    const half = (26 / this.height) * 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * cam.distanceTo(m.position);
+    m.scale.setScalar(half);
+    const up = new THREE.Vector3(p[0], p[1], p[2]).normalize();
+    const n = up.clone();
+    if (terrain) {
+      // The slope across the ring's footprint, from the same height grids the terrain is built from.
+      const { lat, lon } = vecToLatLon(p);
+      const dLat = THREE.MathUtils.radToDeg(half);
+      const dLon = dLat / Math.max(0.05, Math.cos(THREE.MathUtils.degToRad(lat)));
+      const h = (la: number, lo: number) => this.tiles.heightAt(la, lo) / 6_371_000;
+      const slopeE = (h(lat, lon + dLon) - h(lat, lon - dLon)) / (2 * half);
+      const slopeN = (h(lat + dLat, lon) - h(lat - dLat, lon)) / (2 * half);
+      const phi = THREE.MathUtils.degToRad(lat);
+      const lam = THREE.MathUtils.degToRad(lon);
+      const east = new THREE.Vector3(-Math.sin(lam), 0, -Math.cos(lam));
+      const north = new THREE.Vector3(-Math.sin(phi) * Math.cos(lam), Math.cos(phi), Math.sin(phi) * Math.sin(lam));
+      // Most of the slope, not all of it: on exaggerated relief a ring fully along a cliff reads as a wall sign.
+      n.addScaledVector(east, -slopeE * 0.7).addScaledVector(north, -slopeN * 0.7).normalize();
+    }
+    // Never edge-on: at grazing views it leans toward the camera just enough to stay readable.
+    const view = new THREE.Vector3().subVectors(cam, m.position).normalize();
+    const facing = n.dot(view);
+    if (facing < 0.3) n.addScaledVector(view, (0.3 - facing) * 1.4).normalize();
+    m.quaternion.setFromUnitVectors(Z_AXIS, n);
   }
 
   /** Once a second, ask the worker for exact ISS and selected-satellite telemetry. */
@@ -1306,14 +1425,15 @@ export class Engine {
     const res = await fetch("/api/clouds");
     if (!res.ok) throw new Error(`clouds ${res.status}`);
     const meta: { date: string | null; urls: Record<"4k" | "2k", string> } = await res.json();
-    const loader = new THREE.TextureLoader();
-    loader.setCrossOrigin("anonymous");
-    const texture = await loader.loadAsync(meta.urls[this.textureSize]);
+    const texture = await loadTexture(meta.urls[this.textureSize], { crossOrigin: true });
     texture.colorSpace = THREE.NoColorSpace;
     texture.wrapS = THREE.RepeatWrapping;
     texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     if (this.disposed) return texture.dispose();
-    this.planet.setTexture("uClouds", texture);
+    this.uploads.push(texture, () => {
+      this.cloudsLive = true;
+      this.planet.setTexture("uClouds", texture);
+    });
     useOrbis.setState({ cloudsDate: meta.date });
     setFeed("clouds", { status: "ready", count: 1, updated: Date.now() });
   }

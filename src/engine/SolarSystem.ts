@@ -7,6 +7,7 @@ import { trackPosition, type SpacecraftTrack } from "@/lib/feeds/horizons";
 import { AU_KM, EARTH_RADIUS_AU, moonPosition, orbitPath, planetPosition, PLANETS, smallBodyPosition, toScene, type Planet } from "@/lib/orbits";
 import { CameraRig } from "./CameraRig";
 import { Celestial } from "./layers/Celestial";
+import { loadTexture, type UploadQueue } from "./textures";
 import { bodyFragment, bodyVertex, logDepth, markerFragment, markerVertex, moonFragment, sunFragment, sunVertex } from "./shaders";
 
 /** The Earth scene hands over to this one at this many Earth radii (and takes back below it). */
@@ -44,6 +45,7 @@ export const BODY_COLORS: Record<MajorBody, string> = {
   moon: "#d8d8d8",
 };
 const CRAFT_COLOR = "#ff8ad8";
+const CRAFT_PATH_OPACITY = 0.13;
 
 /** Sidereal rotation periods in hours (negative = retrograde). */
 const SPIN_H: Record<MajorBody, number> = {
@@ -125,7 +127,6 @@ export class SolarSystem {
   private asteroidGeometry = new THREE.BufferGeometry();
   private orbits = new THREE.Group();
   private moonOrbit: THREE.Line | null = null;
-  private cometOrbits = new THREE.Group();
   private selectedOrbit: THREE.Line | null = null;
   /** The sky, centred on the camera so no zoom ever reaches it. */
   readonly celestial: Celestial;
@@ -213,7 +214,7 @@ export class SolarSystem {
     this.asteroidPoints.renderOrder = 7;
     this.scene.add(this.asteroidPoints);
 
-    this.scene.add(this.orbits, this.cometOrbits, this.craftPaths);
+    this.scene.add(this.orbits, this.craftPaths);
     this.celestial = new Celestial(700, pixelRatio);
     this.scene.add(this.celestial.group);
     this.buildPlanetOrbits(Date.now());
@@ -221,9 +222,8 @@ export class SolarSystem {
 
   // ---------------------------------------------------------------- assets
 
-  async loadTextures(lite: boolean) {
-    this.celestial.load(lite ? "2k" : "4k").catch(() => undefined);
-    const loader = new THREE.TextureLoader();
+  async loadTextures(lite: boolean, uploads: UploadQueue) {
+    this.celestial.load(lite ? "2k" : "4k", uploads).catch(() => undefined);
     const jobs: [MajorBody, string][] = [
       ["earth", `/textures/day-${String(new Date().getUTCMonth() + 1).padStart(2, "0")}-2k.jpg`],
       ["moon", "/textures/moon-2k.jpg"],
@@ -231,20 +231,22 @@ export class SolarSystem {
     ];
     await Promise.all(
       jobs.map(async ([id, url]) => {
-        const texture = await loader.loadAsync(url);
+        const texture = await loadTexture(url);
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.anisotropy = lite ? 2 : 8;
-        const material = this.materials.get(id);
-        if (material) material.uniforms.uMap.value = texture;
-        const mesh = this.meshes.get(id);
-        if (mesh) mesh.visible = true;
+        uploads.push(texture, () => {
+          const material = this.materials.get(id);
+          if (material) material.uniforms.uMap.value = texture;
+          const mesh = this.meshes.get(id);
+          if (mesh) mesh.visible = true;
+        });
       }),
     );
-    const sunTexture = await loader.loadAsync("/textures/sun-1k.jpg");
+    const sunTexture = await loadTexture("/textures/sun-1k.jpg");
     sunTexture.colorSpace = THREE.SRGBColorSpace;
     sunTexture.wrapS = THREE.RepeatWrapping;
     this.sunMaterial.uniforms.uMap.value = sunTexture;
-    const ringTexture = await loader.loadAsync("/textures/saturn-ring-1k.png");
+    const ringTexture = await loadTexture("/textures/saturn-ring-1k.png");
     ringTexture.colorSpace = THREE.SRGBColorSpace;
     const saturnR = RADIUS_KM.saturn / AU_KM;
     const geometry = new THREE.RingGeometry(saturnR * 1.24, saturnR * 2.27, 128, 1);
@@ -275,15 +277,8 @@ export class SolarSystem {
     this.asteroidGeometry.setAttribute("position", new THREE.BufferAttribute(this.asteroidPos, 3));
     this.asteroidGeometry.setAttribute("aColor", new THREE.BufferAttribute(color, 3));
     this.asteroidGeometry.setAttribute("aSize", new THREE.BufferAttribute(size, 1));
-    this.cometOrbits.clear();
-    const material = new THREE.LineBasicMaterial({ color: "#7ee7e1", transparent: true, opacity: 0.22, depthWrite: false });
-    for (const c of comets) {
-      const points = orbitPath(c.el, 240, 80).map((p) => new THREE.Vector3(...toScene(p)));
-      if (points.length < 2) continue;
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), material);
-      line.frustumCulled = false;
-      this.cometOrbits.add(line);
-    }
+    // Comets draw no orbits until one is picked (see select): dozens of long ellipses crossing the whole view
+    // were most of the clutter around the Sun.
   }
 
   setCraft(craft: SpacecraftTrack[]) {
@@ -294,7 +289,7 @@ export class SolarSystem {
       for (let i = 0; i + 2 < c.xyz.length; i += 3) points.push(new THREE.Vector3(...toScene([c.xyz[i], c.xyz[i + 1], c.xyz[i + 2]])));
       const line = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(points),
-        new THREE.LineBasicMaterial({ color: CRAFT_COLOR, transparent: true, opacity: 0.35, depthWrite: false }),
+        new THREE.LineBasicMaterial({ color: CRAFT_COLOR, transparent: true, opacity: CRAFT_PATH_OPACITY, depthWrite: false }),
       );
       line.frustumCulled = false;
       this.craftPaths.add(line);
@@ -504,7 +499,6 @@ export class SolarSystem {
     if (this.ring) this.ring.position.copy(this.meshes.get("saturn")!.position);
     (this.materials.get("moon")!.uniforms.uEarthPos.value as THREE.Vector3).copy(this.meshes.get("earth")!.position);
     this.orbits.position.set(...rel([0, 0, 0]));
-    this.cometOrbits.position.copy(this.orbits.position);
     this.craftPaths.position.copy(this.orbits.position);
     this.moonOrbit?.position.set(...rel(earth));
 
@@ -549,7 +543,7 @@ export class SolarSystem {
       const sel = this.selected?.kind === "comet" && this.selected.index === i;
       const c = sel ? gold : cometColor;
       mc.setXYZ(k, c.r, c.g, c.b);
-      msz.setX(k, sel ? 9 : 4);
+      msz.setX(k, sel ? 9 : 3);
     });
     const craftColor = new THREE.Color(CRAFT_COLOR);
     this.craftPos.forEach((p, i) => {
@@ -559,7 +553,7 @@ export class SolarSystem {
       const sel = this.selected?.kind === "craft" && this.selected.index === i;
       const c = sel ? gold : craftColor;
       mc.setXYZ(k, c.r, c.g, c.b);
-      msz.setX(k, sel ? 9 : 4.5);
+      msz.setX(k, sel ? 9 : 3.5);
     });
     mp.needsUpdate = mc.needsUpdate = msz.needsUpdate = true;
     const ap = this.asteroidGeometry.getAttribute("position") as THREE.BufferAttribute | undefined;
@@ -572,9 +566,8 @@ export class SolarSystem {
     const d = this.rig.pose.dist;
     const far = THREE.MathUtils.smoothstep(d, 0.015, 0.25);
     this.orbits.visible = far > 0.01;
-    this.cometOrbits.visible = far > 0.01;
     this.craftPaths.visible = far > 0.01;
-    for (const g of [this.orbits, this.cometOrbits, this.craftPaths]) for (const line of g.children) ((line as THREE.Line).material as THREE.LineBasicMaterial).opacity = ((line as THREE.Line).userData.baseOpacity ??= ((line as THREE.Line).material as THREE.LineBasicMaterial).opacity) * far;
+    for (const g of [this.orbits, this.craftPaths]) for (const line of g.children) ((line as THREE.Line).material as THREE.LineBasicMaterial).opacity = ((line as THREE.Line).userData.baseOpacity ??= ((line as THREE.Line).material as THREE.LineBasicMaterial).opacity) * far;
     if (this.moonOrbit) this.moonOrbit.visible = d > 0.0012 && d < 0.3 && this.focus.kind === "major" && (this.focus.id === "earth" || this.focus.id === "moon");
   }
 
@@ -587,8 +580,11 @@ export class SolarSystem {
       this.selectedOrbit.geometry.dispose();
       this.selectedOrbit = null;
     }
+    // A probe's path shows faintly until it is picked (Parker's loops round the Sun crowd the inner system).
     this.craftPaths.children.forEach((line, i) => {
-      ((line as THREE.Line).material as THREE.LineBasicMaterial).color.set(ref?.kind === "craft" && ref.index === i ? "#f2c14e" : CRAFT_COLOR);
+      const picked = ref?.kind === "craft" && ref.index === i;
+      ((line as THREE.Line).material as THREE.LineBasicMaterial).color.set(picked ? "#f2c14e" : CRAFT_COLOR);
+      line.userData.baseOpacity = picked ? 0.6 : CRAFT_PATH_OPACITY;
     });
     if (ref && ref.kind !== "major" && ref.kind !== "craft") {
       const rec = ref.kind === "comet" ? this.comets[ref.index] : this.asteroids[ref.index];

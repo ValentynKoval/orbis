@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useDict } from "@/i18n/client";
 import { layoutLabels } from "@/lib/labels";
+import { panelRects } from "./PlaceLabels";
 import { useOrbis } from "@/store/orbis";
 import { BODY_COLORS, type BodyRef } from "@/engine/SolarSystem";
 
@@ -47,10 +48,13 @@ export function BodyLabels() {
       const isSel = sameRef(l.ref, selected);
       const isFocus = space === "system" && sameRef(l.ref, focus);
       const priority = isSel ? 5 : isFocus ? 4 : l.ref.kind === "major" ? (l.ref.id === "moon" ? 2 : 3) : 1;
-      return { ...l, key, text, isSel, isFocus, priority };
-    });
-  // Keep clear of the top bar and the corner buttons.
-  const chrome: [number, number, number, number][] = [[0, 0, width, 72]];
+      const size = l.ref.kind === "major" ? (l.ref.id === "sun" ? 14 : l.ref.id === "moon" ? 12 : 13) : l.ref.kind === "craft" ? 10 : 11;
+      return { ...l, key, text, isSel, isFocus, priority, size };
+    })
+    // Comets are dots until one is picked: dozens of names around the Sun drowned the planets.
+    .filter((l) => (l.ref.kind !== "comet" && l.ref.kind !== "asteroid") || l.isSel || l.isFocus);
+  // Keep clear of the top bar, the corner buttons and every glass panel (a name under the glass reads as a smudge).
+  const chrome: [number, number, number, number][] = [[0, 0, width, 72], ...panelRects().map((r): [number, number, number, number] => [r.left - 4, r.top - 4, r.right + 4, r.bottom + 4])];
   const layout = layoutLabels(items, width, height, chrome);
 
   return (
@@ -70,10 +74,10 @@ export function BodyLabels() {
             tabIndex={hidden ? -1 : 0}
             onClick={() => (space === "earth" ? engine?.goToSystem(ref) : selectBody(ref))}
             onDoubleClick={() => space === "system" && focusOn(ref)}
-            className={`absolute whitespace-nowrap rounded-full px-1.5 py-0.5 text-[11px] leading-[14px] transition-opacity duration-500 ${hidden ? "pointer-events-none opacity-0" : "pointer-events-auto opacity-100"} ${l.isSel ? "text-foil" : comet ? "text-aurora/80" : craft ? "text-[#ff8ad8]/90" : "text-lunar/85"} hover:text-foil`}
-            style={{ left: place.left, top: place.top, textShadow: "0 1px 6px rgb(0 0 0 / 0.9)" }}
+            className={`absolute whitespace-nowrap rounded-full px-1.5 py-0.5 transition-opacity duration-500 ${hidden ? "pointer-events-none opacity-0" : "pointer-events-auto opacity-100"} ${l.isSel ? "text-foil" : comet ? "text-aurora/80" : craft ? "text-[#ff8ad8]/75" : l.ref.kind === "major" ? "text-lunar" : "text-lunar/85"} ${l.ref.kind === "major" && l.ref.id !== "moon" ? "font-medium" : ""} hover:text-foil`}
+            style={{ left: place.left, top: place.top, fontSize: l.size, lineHeight: `${Math.round(l.size * 1.3)}px`, textShadow: "0 1px 6px rgb(0 0 0 / 0.9)" }}
           >
-            <span className="mr-1.5 inline-block size-1 rounded-full align-middle" style={{ background: color }} />
+            <span className={`mr-1.5 inline-block rounded-full align-middle ${l.size > 12 ? "size-1.5" : "size-1"}`} style={{ background: color }} />
             {l.text}
           </button>
         );

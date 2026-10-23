@@ -452,6 +452,44 @@ export const reticleFragment = /* glsl */ `
   }
 `;
 
+/**
+ * The reticle for a spot on the ground, drawn on a quad that lies on the terrain: seen at an angle it is an
+ * ellipse in perspective. Its depth is pulled toward the camera by a few percent, so a slope under the ring or
+ * the ring's own tilt never cuts it, while a ridge in front of it still hides it.
+ */
+export const groundReticleVertex = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+export const groundReticleFragment = /* glsl */ `
+  uniform vec3 uColor;
+  uniform float uClock;
+  uniform float uOpacity;
+  varying vec2 vUv;
+  void main() {
+    vec2 p = vUv - 0.5;
+    float r = length(p) * 2.0;
+    float aa = max(fwidth(r), 1e-4) * 1.2;
+    float ring = 1.0 - smoothstep(0.035, 0.035 + aa, abs(r - 0.72));
+    float ang = atan(p.y, p.x) + uClock * 0.6;
+    float ticks = step(0.92, abs(cos(ang * 2.0))) * (1.0 - smoothstep(0.05, 0.05 + aa, abs(r - 0.9)));
+    float centre = 1.0 - smoothstep(0.07, 0.07 + aa, r);
+    // A faint disc marks the ground the ring stands for.
+    float fill = (1.0 - smoothstep(0.7, 0.72, r)) * 0.16;
+    float a = max(max(ring * 0.95, ticks), max(centre, fill)) * uOpacity;
+    if (a <= 0.01) discard;
+    gl_FragColor = vec4(uColor, a);
+    #include <colorspace_fragment>
+    #ifdef USE_LOGARITHMIC_DEPTH_BUFFER
+      gl_FragDepth = log2(1.0 + (vFragDepth - 1.0) * 0.96) * logDepthBufFC * 0.5;
+    #endif
+  }
+`;
+
 /** Aircraft and ships: instanced icons moving along great circles (see lib/geo.ts#moveAlong). */
 export const moversVertex = (kinds: number) => /* glsl */ `
   attribute vec2 iLatLon;

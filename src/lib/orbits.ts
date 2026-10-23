@@ -41,13 +41,26 @@ export function julianDay(ms: number): number {
 /** Solves E − e·sin E = M (elliptic) or e·sinh F − F = M (hyperbolic). */
 export function solveKepler(M: number, e: number): number {
   if (e < 1) {
-    let E = e < 0.8 ? M : Math.PI;
-    for (let i = 0; i < 30; i++) {
-      const d = (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E));
-      E -= d;
-      if (Math.abs(d) < 1e-12) break;
+    // The equation is odd in M: solve for |M| in [0, π], where the root lies in [0, π] too, with Newton steps
+    // kept inside that bracket. Plain Newton from E = π ran off for a negative M on eccentric orbits and
+    // returned garbage after its iterations ran out: Halley or Encke jumped across the system for a frame.
+    const turns = Math.round(M / (2 * Math.PI)) * 2 * Math.PI;
+    const m = M - turns;
+    const am = Math.abs(m);
+    let lo = 0;
+    let hi = Math.PI;
+    let E = e < 0.8 ? am : Math.PI;
+    for (let i = 0; i < 60; i++) {
+      const f = E - e * Math.sin(E) - am;
+      if (f > 0) hi = E;
+      else lo = E;
+      let next = E - f / (1 - e * Math.cos(E));
+      if (!(next > lo && next < hi)) next = (lo + hi) / 2;
+      const step = Math.abs(next - E);
+      E = next;
+      if (step < 1e-13) break;
     }
-    return E;
+    return (m < 0 ? -E : E) + turns;
   }
   let F = Math.log(2 * Math.abs(M) / e + 1.8) * Math.sign(M || 1);
   for (let i = 0; i < 50; i++) {

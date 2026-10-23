@@ -42,6 +42,8 @@ interface Node {
   /** The terrain grid this patch takes its relief from, and whether the mesh already has it. */
   terrainKey: string | null;
   raised: boolean;
+  /** Highest relief of the patch's height grid (exaggerated, Earth radii); 0 until the grid arrives. */
+  top: number;
 }
 
 export const tilesVertex = /* glsl */ `
@@ -155,6 +157,8 @@ export class Tiles {
   private diving = false;
   private readonly maxTextures: number;
   private grids = new Map<string, Int16Array | "loading" | "failed">();
+  /** Highest point of each loaded grid, Earth radii (exaggerated). */
+  private gridTops = new Map<string, number>();
   private v = new THREE.Vector3();
   private sphere = new THREE.Sphere();
 
@@ -308,7 +312,12 @@ export class Tiles {
       priority: 0,
       terrainKey: t ? tileKey(t.z, t.x, t.y) : null,
       raised: false,
+      top: 0,
     };
+    // A grid other tiles already loaded: bound the relief now, or a tile made after the grid arrived would keep
+    // flat bounds and drop out of view while its mountain is still on screen.
+    const top = node.terrainKey ? this.gridTops.get(node.terrainKey) : undefined;
+    if (top !== undefined) this.fitRelief(node, top);
     this.nodes.set(key, node);
     return node;
   }
@@ -327,10 +336,19 @@ export class Tiles {
     return new THREE.Vector3(...latLonToVec(lat, lon));
   }
 
+  /** Bounds a patch raised by relief up to `top` (Earth radii): the sphere around it reaches over the peaks. */
+  private fitRelief(node: Node, top: number) {
+    node.top = top;
+    node.radius = node.extent * 1.15 + top;
+  }
+
   private visible(node: Node, cam: THREE.Vector3): boolean {
-    // Beyond the horizon when even the tile's nearest point faces away from the camera.
+    // Beyond the horizon when even the tile's nearest point is hidden by the sea-level sphere. Peaks show over
+    // the horizon from further round the globe: up to acos(1 / (1 + top)) past the camera's own horizon.
     const p = this.nearest(node, cam);
-    if (p.dot(cam) - p.lengthSq() <= 0) return false;
+    const d = cam.length();
+    const reach = Math.acos(Math.min(1, 1 / d)) + (node.top > 0 ? Math.acos(1 / (1 + node.top)) : 0);
+    if (p.dot(cam) / d <= Math.cos(reach)) return false;
     return this.frustum.intersectsSphere(this.sphere.set(node.center, node.radius));
   }
 
@@ -497,9 +515,11 @@ export class Tiles {
         this.grids.set(key, new Int16Array(buf));
         let top = 0;
         for (const h of new Int16Array(buf)) if (h > top) top = h;
+        const relief = (top * TERRAIN_EXAGGERATION) / EARTH_M;
+        this.gridTops.set(key, relief);
         for (const n of this.nodes.values()) {
           if (n.terrainKey !== key) continue;
-          n.radius = n.extent * 1.05 + (top * TERRAIN_EXAGGERATION) / EARTH_M + n.extent * 0.1;
+          this.fitRelief(n, relief);
           if (n.mesh && !n.raised) this.applyHeights(n);
         }
       })
@@ -616,7 +636,11 @@ export class Tiles {
     }
     if (this.grids.size > 600) {
       const live = new Set([...this.nodes.values()].map((n) => n.terrainKey));
-      for (const k of this.grids.keys()) if (!live.has(k)) this.grids.delete(k);
+      for (const k of this.grids.keys()) {
+        if (live.has(k)) continue;
+        this.grids.delete(k);
+        this.gridTops.delete(k);
+      }
     }
   }
 

@@ -82,3 +82,27 @@ describe("small bodies", () => {
     expect(Math.hypot(...hyper[0])).toBeGreaterThan(15);
   });
 });
+
+describe("Kepler solver on eccentric orbits", () => {
+  // Newton from E = π ran off for negative M at high e: comets jumped across the system for a frame.
+  it("converges for every mean anomaly up to e = 0.9999", () => {
+    for (const e of [0.5, 0.8, 0.847, 0.9056, 0.9679, 0.995, 0.9999]) {
+      for (let k = -400; k <= 400; k++) {
+        const M = (k / 400) * Math.PI * 3;
+        const E = solveKepler(M, e);
+        expect(Math.abs(E - e * Math.sin(E) - M)).toBeLessThan(1e-9);
+      }
+    }
+  });
+
+  it("moves a periodic comet smoothly day by day", () => {
+    // 1P/Halley (JPL elements, epoch 1994-02-17).
+    const halley = { e: 0.9679, q: 0.5747, i: 162.19, om: 59.11, w: 112.24, tp: 2446467.39, epoch: 2449400.5 };
+    let prev = smallBodyPosition(halley, Date.UTC(2026, 0, 1))!;
+    for (let d = 1; d < 4000; d++) {
+      const p = smallBodyPosition(halley, Date.UTC(2026, 0, 1) + d * 86_400_000)!;
+      expect(Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2])).toBeLessThan(0.05);
+      prev = p;
+    }
+  });
+});

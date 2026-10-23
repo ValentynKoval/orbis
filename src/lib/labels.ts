@@ -14,6 +14,8 @@ export interface LabelInput {
   text: string;
   /** Higher wins a contested spot. */
   priority: number;
+  /** Font size, px (11 when omitted). */
+  size?: number;
 }
 
 export interface LabelPlacement {
@@ -32,27 +34,29 @@ export function layoutLabels(labels: LabelInput[], width: number, height: number
   const out = new Map<string, LabelPlacement>();
   const sorted = [...labels].sort((a, b) => b.priority - a.priority);
   for (const l of sorted) {
-    const w = PAD + l.text.length * CHAR;
+    const scale = (l.size ?? 11) / 11;
+    const w = PAD + l.text.length * CHAR * scale;
+    const line = LINE * scale;
     const off = Math.max(8, l.px + 6);
     // Right of the anchor, then left, below and above; the side spots may slide vertically and the
     // stacked ones horizontally to stay on screen.
-    const cy = Math.min(height - 4 - LINE, Math.max(4, l.y - LINE / 2));
+    const cy = Math.min(height - 4 - line, Math.max(4, l.y - line / 2));
     const cx = Math.min(width - 4 - w, Math.max(4, l.x - w / 2));
     const spots: [number, number][] = [
       [l.x + off, cy],
       [l.x - off - w, cy],
       [cx, l.y + off + 2],
-      [cx, l.y - off - LINE - 2],
+      [cx, l.y - off - line - 2],
     ];
     let placed: [number, number] | null = null;
     for (const [cx, cy] of spots) {
-      if (cx < 4 || cy < 4 || cx + w > width - 4 || cy + LINE > height - 4) continue;
-      if (boxes.some((b) => cx < b[2] && cx + w > b[0] && cy < b[3] && cy + LINE > b[1])) continue;
+      if (cx < 4 || cy < 4 || cx + w > width - 4 || cy + line > height - 4) continue;
+      if (boxes.some((b) => cx < b[2] && cx + w > b[0] && cy < b[3] && cy + line > b[1])) continue;
       placed = [cx, cy];
       break;
     }
     if (placed) {
-      boxes.push([placed[0], placed[1], placed[0] + w, placed[1] + LINE]);
+      boxes.push([placed[0], placed[1], placed[0] + w, placed[1] + line]);
       out.set(l.key, { left: placed[0], top: placed[1], hidden: false });
     } else out.set(l.key, { left: spots[0][0], top: spots[0][1], hidden: true });
   }

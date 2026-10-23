@@ -21,7 +21,8 @@ interface PinSet {
 }
 
 /** Every visible glass panel; pins and names stay out from under them, where they would show through. */
-function panelRects(): DOMRect[] {
+export function panelRects(): DOMRect[] {
+  if (typeof document === "undefined") return [];
   return [...document.querySelectorAll<HTMLElement>(".bezel")]
     .filter((el) => el.checkVisibility?.({ opacityProperty: true, visibilityProperty: true }) ?? true)
     .map((el) => el.getBoundingClientRect())
@@ -31,6 +32,16 @@ function panelRects(): DOMRect[] {
 /** Moves the pins every frame as the engine reports where they are; returns the unsubscribe. */
 function followPins(engine: Engine, pins: Map<string, HTMLButtonElement>, labels: Map<string, HTMLSpanElement>, set: () => PinSet) {
   const byId = new Map<string, { x: number; y: number; alpha: number; r?: number }>();
+  // Last values written per element: a style write costs a style recalculation even when nothing changed.
+  const written = new Map<HTMLElement, string>();
+  const write = (el: HTMLElement, opacity: string, visibility?: string, transform?: string) => {
+    const key = `${opacity}|${visibility}|${transform}`;
+    if (written.get(el) === key) return;
+    written.set(el, key);
+    el.style.opacity = opacity;
+    if (visibility !== undefined) el.style.visibility = visibility;
+    if (transform !== undefined) el.style.transform = transform;
+  };
   let panels: DOMRect[] = [];
   let panelsAt = 0;
   const under = (l: number, t: number, r: number, b: number) => panels.some((p) => l < p.right + 4 && r > p.left - 4 && t < p.bottom + 4 && b > p.top - 4);
@@ -52,9 +63,9 @@ function followPins(engine: Engine, pins: Map<string, HTMLButtonElement>, labels
       if (!it || !el || !label) continue;
       const shift = always.has(id) ? Math.max(STORM_OFFSET, (it.r ?? 0) + 6) : 0;
       const shown = it.alpha > 0.02 && !under(it.x - 5, it.y - 5, it.x + 5, it.y + 5);
-      el.style.opacity = String(it.alpha);
-      el.style.visibility = shown ? "visible" : "hidden";
-      el.style.transform = `translate3d(${it.x - 5 + shift}px, ${it.y - LINE / 2}px, 0)`;
+      // Hidden pins keep their last spot: moving them would only cost style work.
+      if (!shown) write(el, "0", "hidden");
+      else write(el, it.alpha.toFixed(3), "visible", `translate3d(${(it.x - 5 + shift).toFixed(1)}px, ${(it.y - LINE / 2).toFixed(1)}px, 0)`);
       let showName = false;
       if (shown && (close || always.has(id))) {
         const box: [number, number, number, number] = [it.x + shift, it.y - LINE / 2, it.x + shift + 22 + (names[id]?.length ?? 10) * CHAR, it.y + LINE / 2];
@@ -63,7 +74,7 @@ function followPins(engine: Engine, pins: Map<string, HTMLButtonElement>, labels
           showName = true;
         }
       }
-      label.style.opacity = showName ? "1" : "0";
+      write(label, showName ? "1" : "0");
     }
   });
   return () => engine.watchPlaces(null);

@@ -53,10 +53,11 @@ export default async function LocaleLayout({ children, params }: LayoutProps<"/[
   // Tile hosts: the TLS handshake is done before the first zoom asks for a tile.
   preconnect("https://tiles.maps.eox.at", { crossOrigin: "anonymous" });
   if (process.env.NEXT_PUBLIC_ARCGIS_KEY) preconnect("https://ibasemaps-api.arcgis.com", { crossOrigin: "anonymous" });
-  // three.js loads images with crossOrigin "anonymous"; the preload must match or the browser fetches them twice.
-  preload(`/textures/day-${month}-1k.jpg`, { as: "image", fetchPriority: "high", crossOrigin: "anonymous" });
-  preload("/textures/night-1k.jpg", { as: "image", crossOrigin: "anonymous" });
-  preload("/textures/water-2k.png", { as: "image", crossOrigin: "anonymous" });
+  // The engine fetch()es these and decodes them off the main thread (engine/textures.ts); the preload must be a
+  // fetch with the same CORS mode or the browser downloads them twice.
+  preload(`/textures/day-${month}-1k.jpg`, { as: "fetch", fetchPriority: "high", crossOrigin: "anonymous" });
+  preload("/textures/night-1k.jpg", { as: "fetch", crossOrigin: "anonymous" });
+  preload("/textures/water-2k.png", { as: "fetch", crossOrigin: "anonymous" });
   return (
     <html lang={locale} className={`${unbounded.variable} ${geologica.variable} antialiased`}>
       <body>

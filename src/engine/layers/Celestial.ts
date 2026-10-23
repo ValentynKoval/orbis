@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { logDepth } from "../shaders";
+import { loadTexture, type UploadQueue } from "../textures";
 
 /**
  * The real sky: 5,044 stars to magnitude 6 at their catalogue positions and
@@ -135,7 +136,7 @@ export class Celestial {
     this.group.add(this.milky, this.stars, this.figures, this.labels);
   }
 
-  async load(milkyWay: "2k" | "4k") {
+  async load(milkyWay: "2k" | "4k", uploads: UploadQueue) {
     const { stars, figures } = await loadCatalogue();
     const n = stars.length / 4;
     const pos = new Float32Array(n * 3);
@@ -165,14 +166,16 @@ export class Celestial {
     }
     this.figures.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(segs), 3));
 
-    const texture = await new THREE.TextureLoader().loadAsync(`/textures/milkyway-${milkyWay}.jpg`);
+    const texture = await loadTexture(`/textures/milkyway-${milkyWay}.jpg`);
     texture.colorSpace = THREE.SRGBColorSpace;
     // No mipmaps: the map is magnified on screen anyway, and this keeps the RA seam invisible.
     texture.generateMipmaps = false;
     texture.minFilter = THREE.LinearFilter;
     texture.wrapS = THREE.RepeatWrapping;
-    this.milkyMaterial.uniforms.uMap.value = texture;
-    this.milky.visible = true;
+    uploads.push(texture, () => {
+      this.milkyMaterial.uniforms.uMap.value = texture;
+      this.milky.visible = true;
+    });
   }
 
   /** A constellation name, drawn once into a small texture and kept a fixed size on screen. */
