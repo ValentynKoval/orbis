@@ -919,16 +919,27 @@ export class Engine {
       const i = layer.indexOf(sel.id);
       return i >= 0 ? layer.displayed(i, sim / 1000) : null;
     }
-    if (sel.kind === "quake") return latLonToVec(sel.quake.lat, sel.quake.lon, 1.003);
+    if (sel.kind === "quake") return this.surfacePoint(sel.quake.lat, sel.quake.lon);
     if (sel.kind === "storm") {
       const at = this.storms.positions().find((s) => s.storm.id === sel.id)?.at;
       return at ? [at.x * 1.007, at.y * 1.007, at.z * 1.007] : null;
     }
     if (sel.kind === "place") {
       const p = placeById(sel.id);
-      return p ? latLonToVec(p.lat, p.lon, 1.003) : null;
+      return p ? this.surfacePoint(p.lat, p.lon) : null;
     }
-    return latLonToVec(sel.lat, sel.lon, 1.003);
+    return this.surfacePoint(sel.lat, sel.lon);
+  }
+
+  /**
+   * A marker's anchor on the ground: the real terrain height plus a lift that shrinks with the camera's altitude
+   * (a few kilometres from orbit, tens of metres near the ground), so a marker never floats off its spot in a
+   * close, tilted view and never sinks into a ridge from afar.
+   */
+  private surfacePoint(lat: number, lon: number): Vec3 {
+    const ground = Math.max(0, this.tiles.heightAt(lat, lon)) / 6_371_000;
+    const lift = THREE.MathUtils.clamp((this.rig.pose.dist - 1) * 0.0015, 3e-6, 0.003);
+    return latLonToVec(lat, lon, 1 + ground + lift);
   }
 
   private updateReticle(sim: number) {
@@ -990,6 +1001,8 @@ export class Engine {
     let best: Selection | null = null;
     const screen = (x: number, y: number, z: number) => {
       v.set(x, y, z).project(this.camera);
+      // Behind the camera a point projects mirrored onto the screen; it can never be what was tapped.
+      if (v.z > 1) return Infinity;
       return Math.hypot(((v.x + 1) / 2) * w - px, ((1 - v.y) / 2) * h - py);
     };
     const surfaceVisible = (x: number, y: number, z: number) => x * (cam.x - x) + y * (cam.y - y) + z * (cam.z - z) > 0;
@@ -1093,8 +1106,16 @@ export class Engine {
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
-    const hit = ray.ray.intersectSphere(new THREE.Sphere(new THREE.Vector3(), 1), new THREE.Vector3());
-    if (!hit) return null;
+    // The ground is the sea-level sphere raised by the terrain under the hit; a few rounds of re-intersecting
+    // with the sphere at that height land on the hillside that was tapped, not on sea level behind it.
+    const sphere = new THREE.Sphere(new THREE.Vector3(), 1);
+    const hit = new THREE.Vector3();
+    if (!ray.ray.intersectSphere(sphere, hit)) return null;
+    for (let i = 0; i < 3; i++) {
+      const at = vecToLatLon([hit.x, hit.y, hit.z]);
+      sphere.radius = 1 + Math.max(0, this.tiles.heightAt(at.lat, at.lon)) / 6_371_000;
+      if (!ray.ray.intersectSphere(sphere, hit)) break;
+    }
     const p = vecToLatLon([hit.x, hit.y, hit.z]);
     return { lat: Math.round(p.lat * 1e4) / 1e4, lon: Math.round(p.lon * 1e4) / 1e4 };
   }
@@ -1106,12 +1127,14 @@ export class Engine {
     this.placesListener = fn;
   }
 
-  private placeItems: { id: string; x: number; y: number; alpha: number; v: THREE.Vector3; r?: number }[] = PLACES.map((p) => ({
+  private placeItems: { id: string; x: number; y: number; alpha: number; v: THREE.Vector3; r?: number; lat?: number; lon?: number }[] = PLACES.map((p) => ({
     id: p.id as string,
     x: 0,
     y: 0,
     alpha: 0,
     v: new THREE.Vector3(...latLonToVec(p.lat, p.lon, 1.0005)),
+    lat: p.lat,
+    lon: p.lon,
   }));
   /** Storm names follow their centres; ids are "storm:<GDACS id>". */
   private stormItems: Engine["placeItems"] = [];
@@ -1125,6 +1148,12 @@ export class Engine {
     const far = 1 - THREE.MathUtils.smoothstep(this.rig.pose.dist, 3.2, 4.6);
     const v = new THREE.Vector3();
     for (const it of this.placeItems) {
+      if (layer * far < 0.001) {
+        it.alpha = 0;
+        continue;
+      }
+      // Pins stand on the terrain under them, as the selection marker does.
+      it.v.set(...this.surfacePoint(it.lat!, it.lon!));
       const facing = it.v.x * (cam.x - it.v.x) + it.v.y * (cam.y - it.v.y) + it.v.z * (cam.z - it.v.z);
       v.copy(it.v).project(this.camera);
       const onScreen = v.z < 1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05;
