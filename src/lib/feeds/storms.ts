@@ -42,6 +42,9 @@ interface GdacsFeature {
   geometry: { type: string; coordinates: unknown };
 }
 
+/** GDACS alert colours as the globe and the labels draw them. */
+export const ALERT_COLORS: Record<Storm["alert"], string> = { green: "#7be38f", orange: "#ffb14e", red: "#ff5d73" };
+
 const round = (x: number) => Math.round(x * 100) / 100;
 
 /** "21/10 15:00 UTC" in the year that puts it nearest the storm's start. */

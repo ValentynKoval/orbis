@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { gmst, julianDate, normalizeLon, sunPosition } from "./astro";
-import { advanceOrbit, haversineKm, latLonToVec, moveAlong, vecToLatLon, type Vec3 } from "./geo";
+import { advanceOrbit, bearingDeg, haversineKm, latLonToVec, moveAlong, vecToLatLon, type Vec3 } from "./geo";
 import { parseUsgs } from "./feeds/quakes";
 import { parseFirmsCsv } from "./feeds/fires";
 import { classify, parseTle, SatGroup } from "./feeds/satellites";
@@ -53,6 +53,9 @@ describe("geo", () => {
   it("measures Kyiv–Chernihiv as ~125 km", () => {
     expect(haversineKm(50.45, 30.52, 51.49, 31.29)).toBeGreaterThan(120);
     expect(haversineKm(50.45, 30.52, 51.49, 31.29)).toBeLessThan(135);
+    // Kyiv to Chernihiv runs north-north-east; due east along the equator is 90°.
+    expect(bearingDeg(50.45, 30.52, 51.49, 31.29)).toBeCloseTo(25, 0);
+    expect(bearingDeg(0, 0, 0, 10)).toBeCloseTo(90, 6);
   });
 
   it("advances a circular orbit by exactly ω·dt", () => {

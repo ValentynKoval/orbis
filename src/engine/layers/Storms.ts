@@ -1,12 +1,10 @@
 import * as THREE from "three";
 import { latLonToVec } from "@/lib/geo";
-import { stormAt, type Storm } from "@/lib/feeds/storms";
+import { ALERT_COLORS, stormAt, type Storm } from "@/lib/feeds/storms";
 import { logDepth } from "../shaders";
 
 /** Just over the cloud deck (1.006): a storm is the one thing that must read through its own clouds. */
 const LIFT = 1.0068;
-
-export const ALERT_COLORS: Record<Storm["alert"], string> = { green: "#7be38f", orange: "#ffb14e", red: "#ff5d73" };
 
 const swirlVertex = /* glsl */ `
   uniform vec3 uCenter;
@@ -225,8 +223,8 @@ export class Storms {
   }
 
   /** Storms now on their track, with their centres (Earth-fixed unit vectors), for picking and labels. */
-  positions(): { storm: Storm; at: THREE.Vector3 }[] {
-    return this.drawn.filter((d) => d.at).map((d) => ({ storm: d.storm, at: d.at! }));
+  positions(): { storm: Storm; at: THREE.Vector3; radius: number }[] {
+    return this.drawn.filter((d) => d.at).map((d) => ({ storm: d.storm, at: d.at!, radius: d.swirl.material.uniforms.uSize.value as number }));
   }
 
   select(id: number | null) {

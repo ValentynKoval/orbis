@@ -34,6 +34,15 @@ export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: numb
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/** Initial great-circle bearing from the first point to the second, degrees clockwise from north (0–360). */
+export function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const f1 = lat1 * DEG;
+  const f2 = lat2 * DEG;
+  const dl = (lon2 - lon1) * DEG;
+  const b = Math.atan2(Math.sin(dl) * Math.cos(f2), Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl));
+  return (b / DEG + 360) % 360;
+}
+
 /**
  * Advances a position along a near-circular orbit by rotating it about the
  * angular-momentum axis. The satellite shader does the same on the GPU; this

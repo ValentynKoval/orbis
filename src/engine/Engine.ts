@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { gmst, sunPosition } from "@/lib/astro";
-import { haversineKm, latLonToVec, rotateY, vecToLatLon, type Vec3 } from "@/lib/geo";
+import { bearingDeg, haversineKm, latLonToVec, rotateY, vecToLatLon, type Vec3 } from "@/lib/geo";
 import type { Pass } from "@/lib/passes";
 import type { PlaneInfo } from "./layers/Traffic";
 import type { FireGrid } from "@/lib/feeds/fires";
@@ -12,6 +12,7 @@ import type { SearchCandidate } from "@/lib/search";
 import { SatGroup } from "@/lib/feeds/satellites";
 import { setFeed, useOrbis, type PlaneFilter } from "@/store/orbis";
 import { CameraRig } from "./CameraRig";
+import { RideAlong, rideable, type Locate } from "./RideAlong";
 import { SimClock } from "./SimClock";
 import { Ambience } from "./Ambience";
 import { Fires } from "./layers/Fires";
@@ -72,6 +73,7 @@ export interface EngineOptions {
 export class Engine {
   readonly clock = new SimClock();
   readonly rig: CameraRig;
+  private ride: RideAlong;
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(32, 1, 0.01, 8000);
@@ -211,6 +213,7 @@ export class Engine {
     ) as Engine["opacity"];
 
     this.rig = new CameraRig(this.camera, canvas);
+    this.ride = new RideAlong(this.rig, this.locate);
     this.rig.maxDist = EARTH_MAX_RADII;
     // Sub-metre imagery lets the camera descend to a few hundred metres; 10 m imagery stops it ~13 km up.
     this.baseMinDist = esriKey ? 1.0004 : 1.0024;
@@ -586,10 +589,7 @@ export class Engine {
     if (!ahead) return { storm, ...at, heading: null, speedKmh: null };
     const forward = stormAt(storm, now + 3 * 3600_000) !== null;
     const [from, to] = forward ? [at, ahead] : [ahead, at];
-    const f1 = THREE.MathUtils.degToRad(from.lat);
-    const f2 = THREE.MathUtils.degToRad(to.lat);
-    const dl = THREE.MathUtils.degToRad(to.lon - from.lon);
-    const heading = (THREE.MathUtils.radToDeg(Math.atan2(Math.sin(dl) * Math.cos(f2), Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl))) + 360) % 360;
+    const heading = bearingDeg(from.lat, from.lon, to.lat, to.lon);
     return { storm, ...at, heading, speedKmh: haversineKm(from.lat, from.lon, to.lat, to.lon) / 3 };
   }
 
@@ -616,60 +616,34 @@ export class Engine {
   private userMove: (() => void) | null = null;
   /** Any drag, pinch, wheel or key ends a ride-along and tells whoever is watching (the tour). */
   private handleUserMove = () => {
-    if (this.following) this.follow(null);
+    if (this.ride.active) this.follow(null);
     this.userMove?.();
   };
 
-  /** The object the camera rides along with. */
-  private following: Selection | null = null;
-
   /**
-   * Rides along with a satellite, aircraft or ship: the camera sits behind it, at its height, looking
-   * along its course, and keeps pace in real time (or replay time). Null hands the camera back.
+   * Rides along with a satellite, aircraft or ship (see RideAlong). Anything else, or null, hands the camera back.
    */
   follow(selection: Selection | null) {
-    this.following = selection && (selection.kind === "satellite" || selection.kind === "plane" || selection.kind === "ship") ? selection : null;
-    // Ending a ride eases the view back to north-up and the usual lean.
-    if (!this.following) this.rig.resetOrientation();
-    useOrbis.setState({ following: !!this.following });
+    this.ride.ride(rideable(selection) ? selection : null);
+    useOrbis.setState({ following: this.ride.active });
   }
 
   private updateFollow(sim: number) {
-    const sel = this.following;
-    if (!sel) return;
-    if (useOrbis.getState().selection !== sel) return this.follow(null);
-    const ahead = 4000;
-    let now: Vec3 | null = null;
-    let next: Vec3 | null = null;
-    if (sel.kind === "satellite") {
-      const a = this.satellites.positionOf(sel.index, sim);
-      const b = this.satellites.positionOf(sel.index, sim + ahead);
-      if (a && b) {
-        now = rotateY(a, -gmst(sim));
-        next = rotateY(b, -gmst(sim + ahead));
-      }
-    } else if (sel.kind === "plane" || sel.kind === "ship") {
-      const layer = sel.kind === "plane" ? this.traffic.planes : this.traffic.ships;
-      const i = layer.indexOf(sel.id);
-      if (i >= 0) {
-        now = layer.displayed(i, sim / 1000);
-        next = layer.displayed(i, (sim + ahead) / 1000);
-      }
-    }
-    if (!now || !next) return;
-    const p = vecToLatLon(now);
-    const q = vecToLatLon(next);
-    const f1 = THREE.MathUtils.degToRad(p.lat);
-    const f2 = THREE.MathUtils.degToRad(q.lat);
-    const dl = THREE.MathUtils.degToRad(q.lon - p.lon);
-    const moved = Math.abs(q.lat - p.lat) + Math.abs(q.lon - p.lon) > 1e-7;
-    const heading = moved ? THREE.MathUtils.radToDeg(Math.atan2(Math.sin(dl) * Math.cos(f2), Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl))) : this.rig.heading;
-    const altitude = sel.kind === "ship" ? 0 : Math.max(0, p.r - 1);
-    // Behind and a little above: farther back for faster, higher things.
-    const [range, tilt] = sel.kind === "satellite" ? [0.012, 74] : sel.kind === "plane" ? [0.0026, 74] : [0.0009, 64];
-    this.rig.pivotAltitude = altitude;
-    this.rig.track({ lat: p.lat, lon: p.lon, dist: 1 + altitude + range }, heading, tilt);
+    if (!this.ride.active) return;
+    if (!this.ride.rides(useOrbis.getState().selection)) return this.follow(null);
+    this.ride.update(sim);
   }
+
+  /** Where a ridden object is, Earth-fixed: satellites from their propagated orbit, traffic as drawn. */
+  private locate: Locate = (target, sim) => {
+    if (target.kind === "satellite") {
+      const p = this.satellites.positionOf(target.index, sim);
+      return p ? rotateY(p, -gmst(sim)) : null;
+    }
+    const layer = target.kind === "plane" ? this.traffic.planes : this.traffic.ships;
+    const i = layer.indexOf(target.id);
+    return i >= 0 ? layer.displayed(i, sim / 1000) : null;
+  };
 
   /** Catalogue index of the ISS, or −1 until the element sets have loaded. */
   get issIndex() {
@@ -724,7 +698,7 @@ export class Engine {
     const pivot = this.tiles.heightAt(this.rig.pose.lat, this.rig.pose.lon) / 6_371_000;
     const clearance = Math.max(this.baseMinDist - 1, under - pivot + 300 / 6_371_000);
     // Riding along, the follower keeps the camera at the object's height; only the imagery floor applies.
-    this.rig.minDist = this.following ? 1.0002 : 1 + pivot + clearance / Math.max(0.25, Math.cos(THREE.MathUtils.degToRad(this.rig.tilt)));
+    this.rig.minDist = this.ride.active ? 1.0002 : 1 + pivot + clearance / Math.max(0.25, Math.cos(THREE.MathUtils.degToRad(this.rig.tilt)));
     const attributions = [...this.tiles.attributions, ...this.rain.attributions];
     if (attributions.join("|") !== this.lastAttribution) {
       this.lastAttribution = attributions.join("|");
@@ -917,8 +891,9 @@ export class Engine {
     const surfaceFade = 1 - THREE.MathUtils.smoothstep(dist, 40, 170);
     this.satellites.setOpacity(this.opacity.satellites.value * farFade);
     // Constellation figures belong to the open sky: they come in as the globe shrinks.
-    // Beside the bright planet the Milky Way stays a quiet backdrop; out in the solar system it comes up.
-    this.celestial.setOpacity(1, this.opacity.constellations.value * THREE.MathUtils.smoothstep(this.rig.pose.dist, 5, 14), 0.3 + 0.4 * THREE.MathUtils.smoothstep(this.rig.pose.dist, 3, 40));
+    // Beside the bright planet the Milky Way stays a faint backdrop (its 4k map turns blotchy when magnified);
+    // out in the solar system it comes up.
+    this.celestial.setOpacity(1, this.opacity.constellations.value * THREE.MathUtils.smoothstep(this.rig.pose.dist, 5, 14), 0.14 + 0.56 * THREE.MathUtils.smoothstep(this.rig.pose.dist, 3, 40));
     this.quakes.setOpacity(this.opacity.quakes.value * surfaceFade);
     this.storms.setOpacity(this.opacity.storms.value * surfaceFade);
     this.fires.setOpacity(this.opacity.fires.value * surfaceFade);
@@ -1125,12 +1100,22 @@ export class Engine {
   }
 
   /** Landmark pins: the HTML layer registers here and is told, every frame, where each one is on screen. */
-  placesListener: ((items: { id: string; x: number; y: number; alpha: number }[]) => void) | null = null;
+  /** Receives the screen position of every landmark pin and storm name each frame. */
+  placesListener: ((items: { id: string; x: number; y: number; alpha: number; r?: number }[]) => void) | null = null;
   watchPlaces(fn: Engine["placesListener"]) {
     this.placesListener = fn;
   }
 
-  private placeItems = PLACES.map((p) => ({ id: p.id as string, x: 0, y: 0, alpha: 0, v: new THREE.Vector3(...latLonToVec(p.lat, p.lon, 1.0005)) }));
+  private placeItems: { id: string; x: number; y: number; alpha: number; v: THREE.Vector3; r?: number }[] = PLACES.map((p) => ({
+    id: p.id as string,
+    x: 0,
+    y: 0,
+    alpha: 0,
+    v: new THREE.Vector3(...latLonToVec(p.lat, p.lon, 1.0005)),
+  }));
+  /** Storm names follow their centres; ids are "storm:<GDACS id>". */
+  private stormItems: Engine["placeItems"] = [];
+  private pinItems: Engine["placeItems"] = this.placeItems;
 
   private updatePlaces() {
     if (!this.placesListener) return;
@@ -1149,7 +1134,31 @@ export class Engine {
       it.x = ((v.x + 1) / 2) * this.width;
       it.y = ((1 - v.y) / 2) * this.height;
     }
-    this.placesListener(this.placeItems);
+    if (this.stormItems.length) {
+      const centres = new Map(this.storms.positions().map((p) => [`storm:${p.storm.id}`, p]));
+      // Storm names hold out further than landmark pins: a typhoon is worth naming from orbit.
+      const named = this.opacity.storms.value * (1 - THREE.MathUtils.smoothstep(this.rig.pose.dist, 6, 9));
+      for (const it of this.stormItems) {
+        const centre = centres.get(it.id);
+        if (!centre) {
+          it.alpha = 0;
+          continue;
+        }
+        it.v.copy(centre.at).multiplyScalar(1.0068);
+        // The swirl's radius on screen, so the name can sit just outside it: the eye's distance to the camera
+        // turns the swirl's size in Earth radii into pixels.
+        const fovScale = this.height / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)));
+        it.r = (centre.radius / Math.max(1e-6, this.camera.position.distanceTo(it.v))) * fovScale;
+        const facing = it.v.x * (cam.x - it.v.x) + it.v.y * (cam.y - it.v.y) + it.v.z * (cam.z - it.v.z);
+        v.copy(it.v).project(this.camera);
+        const onScreen = v.z < 1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05;
+        const limb = THREE.MathUtils.smoothstep(facing / (it.v.length() * cam.distanceTo(it.v) || 1), 0, 0.12);
+        it.alpha = onScreen && facing > 0 ? named * limb : 0;
+        it.x = ((v.x + 1) / 2) * this.width;
+        it.y = ((1 - v.y) / 2) * this.height;
+      }
+    }
+    this.placesListener(this.pinItems);
   }
 
   /**
@@ -1342,6 +1351,9 @@ export class Engine {
     const { storms } = (await res.json()) as { storms: Storm[] };
     if (this.disposed) return;
     this.storms.set(storms);
+    this.stormItems = storms.map((s) => ({ id: `storm:${s.id}`, x: 0, y: 0, alpha: 0, v: new THREE.Vector3() }));
+    this.pinItems = [...this.placeItems, ...this.stormItems];
+    useOrbis.setState({ stormPins: storms.map((s) => ({ id: s.id, name: s.name, alert: s.alert })) });
     const now = this.clock.now();
     setFeed("storms", { status: "ready", count: storms.filter((s) => stormAt(s, now)).length, updated: Date.now() });
   }

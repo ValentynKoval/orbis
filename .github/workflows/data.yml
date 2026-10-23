@@ -35,9 +35,10 @@ jobs:
       - name: Download active satellites
         run: |
           mkdir -p data/celestrak
-          code=$(curl -sS -A "Orbis/1.0 (+https://github.com/${{ github.repository }})" \
+          # A slow or unreachable CelesTrak keeps the last copy; it must not stop the other feeds.
+          code=$(curl -sS --max-time 120 -A "Orbis/1.0 (+https://github.com/${{ github.repository }})" \
             -o /tmp/active.tle -w '%{http_code}' \
-            'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle')
+            'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle') || code="failed"
           echo "HTTP $code"
           if [ "$code" = "200" ] && grep -q '^1 ' /tmp/active.tle; then
             mv /tmp/active.tle data/celestrak/active.tle

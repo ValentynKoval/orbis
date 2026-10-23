@@ -56,6 +56,8 @@ interface OrbisState {
   tour: boolean;
   /** The camera is riding along with the selected object. */
   following: boolean;
+  /** Storms the labels layer names on the globe. */
+  stormPins: { id: number; name: string; alert: "green" | "orange" | "red" }[];
   /**
    * The panel in the right dock (on phones, the bottom sheet). Cards for a selection take the same
    * place, so opening a panel clears the selection and selecting something closes the panel.
@@ -90,6 +92,7 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   sound: false,
   tour: false,
   following: false,
+  stormPins: [],
   setTour: (tour) => set({ tour, ...(tour ? { panel: null } : {}) }),
   panel: null,
   openPanel: (panel) => {
