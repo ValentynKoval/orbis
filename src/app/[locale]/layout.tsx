@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { notFound } from "next/navigation";
-import { preload } from "react-dom";
+import { preconnect, preload } from "react-dom";
 import { Geologica, Unbounded } from "next/font/google";
 import { dictionaries, isLocale, locales } from "@/i18n/config";
 import { LocaleProvider } from "@/i18n/client";
@@ -50,6 +50,9 @@ export default async function LocaleLayout({ children, params }: LayoutProps<"/[
   if (!isLocale(locale)) notFound();
   // The globe's first-paint maps start downloading with the HTML.
   const month = String(new Date().getUTCMonth() + 1).padStart(2, "0");
+  // Tile hosts: the TLS handshake is done before the first zoom asks for a tile.
+  preconnect("https://tiles.maps.eox.at", { crossOrigin: "anonymous" });
+  if (process.env.NEXT_PUBLIC_ARCGIS_KEY) preconnect("https://ibasemaps-api.arcgis.com", { crossOrigin: "anonymous" });
   // three.js loads images with crossOrigin "anonymous"; the preload must match or the browser fetches them twice.
   preload(`/textures/day-${month}-1k.jpg`, { as: "image", fetchPriority: "high", crossOrigin: "anonymous" });
   preload("/textures/night-1k.jpg", { as: "image", crossOrigin: "anonymous" });

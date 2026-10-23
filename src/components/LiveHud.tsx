@@ -6,6 +6,7 @@ import { fill } from "@/i18n/config";
 import { formatAgo, formatDate, formatLatLon, formatNumber } from "@/lib/format";
 import { useOrbis } from "@/store/orbis";
 import { placeById } from "@/lib/places";
+import { stormCategory } from "@/lib/feeds/storms";
 import type { FeedKey, LayerKey, Selection } from "@/engine/types";
 import { ArrowUpRight, Close, Recenter, Stack, Target } from "./icons";
 import { useClockFormat, useNow } from "./hooks";
@@ -22,6 +23,7 @@ import { Tour } from "./Tour";
 import { PlaceLabels } from "./PlaceLabels";
 import { PointCard } from "./PointCard";
 import { TopBar } from "./TopBar";
+import { DockHost } from "./Dock";
 
 const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
   { key: "satellites", feed: "satellites", swatch: "bg-ion" },
@@ -31,6 +33,8 @@ const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
   { key: "fires", feed: "fires", swatch: "bg-ember" },
   { key: "aurora", feed: "aurora", swatch: "bg-[#5cf27a]" },
   { key: "rain", feed: "rain", swatch: "bg-[#4aa3ff]" },
+  { key: "wind", feed: "wind", swatch: "bg-[#cfe3ff]" },
+  { key: "storms", feed: "storms", swatch: "bg-[#ff5d73]" },
   { key: "places", swatch: "bg-foil" },
   { key: "clouds", feed: "clouds", swatch: "bg-cloud" },
   { key: "lights", swatch: "bg-glow" },
@@ -39,12 +43,15 @@ const LAYERS: { key: LayerKey; feed?: FeedKey; swatch: string }[] = [
 ];
 
 export function LiveHud() {
+  const [docks, setDocks] = useState<HTMLDivElement | null>(null);
   const engine = useOrbis((s) => s.engine);
   const selection = useOrbis((s) => s.selection);
   const space = useOrbis((s) => s.space);
   const tour = useOrbis((s) => s.tour);
   const setTour = useOrbis((s) => s.setTour);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const panel = useOrbis((s) => s.panel);
+  const openPanel = useOrbis((s) => s.openPanel);
+  const layersOpen = panel === "layers";
   const t = useDict();
 
   useEffect(() => {
@@ -90,10 +97,13 @@ export function LiveHud() {
   }, []);
 
   return (
+    <DockHost value={docks}>
     <div className="pointer-events-none fixed inset-0 z-10">
       {/* Pins and body names first, so every panel and button sits above them. */}
       <PlaceLabels />
       <BodyLabels />
+      {/* Toolbar panels (sky, analyst) render here, so they dock against the viewport like the cards. */}
+      <div ref={setDocks} className="absolute inset-0" />
       <TopBar live />
       <div className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 max-lg:top-[calc(max(1rem,env(safe-area-inset-top))+4rem)]">
         <Fade shown={space === "earth"} layer={false} className="flex items-center gap-2">
@@ -133,25 +143,27 @@ export function LiveHud() {
       <Tour />
       <h1 className="sr-only">{t.nav.live}</h1>
 
-      {/* Layers: a side panel on wide screens, a sheet behind a button on phones. */}
+      {/* Layers: the left dock on wide screens; on phones a sheet that shares the bottom slot with cards. */}
       <Fade shown={space === "earth"}>
-      <div className="absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] left-4 flex flex-col items-start gap-3 md:top-24 md:bottom-auto">
-        <button
-          type="button"
-          onClick={() => setPanelOpen((v) => !v)}
-          aria-expanded={panelOpen}
-          aria-controls="layers-panel"
-          className="bezel pointer-events-auto rounded-full p-1 md:hidden"
-        >
-          <span className="bezel-core flex items-center gap-2 rounded-full px-4 py-2.5 text-sm">
-            <Stack className="size-4 text-foil" />
-            {panelOpen ? t.hud.closePanel : t.hud.openPanel}
-          </span>
-        </button>
-        <div id="layers-panel" className={`${panelOpen ? "block" : "hidden"} max-md:order-first md:block`}>
-          <LayerPanel />
-        </div>
-      </div>
+      {/* The cinematic tour clears the left dock away. */}
+      <Fade shown={!tour}>
+        {!layersOpen && !selection && !panel && (
+          <button
+            type="button"
+            onClick={() => openPanel("layers")}
+            aria-expanded={false}
+            aria-controls="layers-panel"
+            className="bezel pointer-events-auto absolute bottom-[var(--dock-bottom)] left-4 rounded-full p-1 md:hidden"
+          >
+            <span className="bezel-core flex items-center gap-2 rounded-full px-4 py-2.5 text-sm">
+              <Stack className="size-4 text-foil" />
+              {t.hud.openPanel}
+            </span>
+          </button>
+        )}
+        {/* The panel is its own scroller, so a sheet that runs out of room keeps its rounded frame. */}
+        <LayerPanel className={layersOpen ? "" : "max-md:hidden"} onClose={() => openPanel(null)} />
+      </Fade>
       {selection?.kind === "point" ? (
         <PointCard key={cardKey(selection)} lat={selection.lat} lon={selection.lon} />
       ) : (
@@ -162,12 +174,13 @@ export function LiveHud() {
       </Fade>
       <Perf />
     </div>
+    </DockHost>
   );
 }
 
 function cardKey(s: Selection) {
   if (s.kind === "quake") return s.quake.id;
-  if (s.kind === "plane" || s.kind === "ship" || s.kind === "place") return `${s.kind}-${s.id}`;
+  if (s.kind === "plane" || s.kind === "ship" || s.kind === "place" || s.kind === "storm") return `${s.kind}-${s.id}`;
   if (s.kind === "point") return `point-${s.lat},${s.lon}`;
   return `${s.kind}-${s.index}`;
 }
@@ -192,7 +205,7 @@ function Filters({ layer }: { layer: "planes" | "ships" }) {
   const shipKinds = useOrbis((s) => s.shipKinds);
   const toggleShipKind = useOrbis((s) => s.toggleShipKind);
   return (
-    <div className="flex flex-wrap gap-1.5 px-3 pb-2.5 pl-8">
+    <div className="flex flex-wrap gap-1.5 px-2">
       {layer === "planes"
         ? (["all", "airborne", "high"] as const).map((f) => (
             <Chip key={f} on={planeFilter === f} onClick={() => setPlaneFilter(f)}>
@@ -208,7 +221,7 @@ function Filters({ layer }: { layer: "planes" | "ships" }) {
   );
 }
 
-function LayerPanel() {
+function LayerPanel({ className, onClose }: { className: string; onClose: () => void }) {
   const t = useDict();
   const locale = useLocale();
   const layers = useOrbis((s) => s.layers);
@@ -216,21 +229,32 @@ function LayerPanel() {
   const toggle = useOrbis((s) => s.toggleLayer);
   const engine = useOrbis((s) => s.engine);
   const kp = useOrbis((s) => s.auroraKp);
+  const [filters, setFilters] = useState(false);
 
   return (
-    <section aria-label={t.hud.layers} className="bezel pointer-events-auto w-[min(19rem,calc(100vw-2rem))]">
+    <section id="layers-panel" aria-label={t.hud.layers} className={`dock-left bezel pointer-events-auto ${className}`}>
       <div className="bezel-core p-2">
-        <ul className="flex flex-col">
+        <div className="flex items-center justify-between px-2 pt-0.5 pb-1.5 md:hidden">
+          <h2 className="text-xs text-haze">{t.hud.layers}</h2>
+          <button type="button" onClick={onClose} aria-label={t.hud.closePanel} className="-mr-1 rounded-full p-2 text-haze hover:text-lunar">
+            <Close className="size-4" />
+          </button>
+        </div>
+        <ul className="grid grid-cols-2 gap-0.5">
           {LAYERS.map(({ key, feed, swatch }) => {
             const state = feed ? feeds[feed] : null;
             const on = layers[key];
             const status =
               state?.status === "error"
                 ? t.hud.status.error
-                : state?.status === "loading" || state?.status === "idle"
+                : state?.status === "loading" || (state?.status === "idle" && key !== "wind")
                   ? t.hud.status.loading
                   : key === "rain"
                     ? ""
+                    : key === "wind"
+                    ? state?.updated
+                      ? `GFS ${String(new Date(state.updated).getUTCHours()).padStart(2, "0")}z`
+                      : ""
                     : key === "aurora"
                     ? kp === null
                       ? ""
@@ -245,27 +269,47 @@ function LayerPanel() {
                   role="switch"
                   aria-checked={on}
                   onClick={() => toggle(key)}
-                  className="group flex w-full items-center gap-3 rounded-[0.9rem] px-3 py-2.5 text-left transition-colors duration-300 ease-[var(--ease-orbit)] hover:bg-white/[0.04]"
+                  className="group flex w-full flex-col items-start gap-0.5 rounded-[0.9rem] px-2.5 py-1.5 text-left md:py-2 transition-colors duration-300 ease-[var(--ease-orbit)] hover:bg-white/[0.04]"
                 >
-                  <span
-                    className={`size-2 shrink-0 rounded-full transition-all duration-500 ease-[var(--ease-orbit)] ${swatch} ${on ? "opacity-100 shadow-[0_0_10px_currentColor]" : "scale-75 opacity-25"}`}
-                  />
-                  <span className={`flex-1 text-sm transition-colors duration-300 ${on ? "text-lunar" : "text-dim"}`}>{t.layers[key]}</span>
-                  <span className={`readout text-xs whitespace-nowrap ${state?.status === "error" ? "text-seismic" : "text-dim"}`}>{status}</span>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={`size-2 shrink-0 rounded-full transition-all duration-500 ease-[var(--ease-orbit)] ${swatch} ${on ? "opacity-100 shadow-[0_0_10px_currentColor]" : "scale-75 opacity-25"}`}
+                    />
+                    <span className={`truncate text-[13px] transition-colors duration-300 ${on ? "text-lunar" : "text-dim"}`}>{t.layers[key]}</span>
+                  </span>
+                  <span className={`readout min-h-4 truncate pl-4 text-[11px] ${state?.status === "error" ? "text-seismic" : "text-dim"}`}>{status}</span>
                 </button>
-                {on && (key === "planes" || key === "ships") && <Filters layer={key} />}
               </li>
             );
           })}
         </ul>
-        <div className="mt-1 border-t border-hairline px-1 pt-2">
+        <div className="mt-1 border-t border-hairline px-1 pt-1.5">
+          <button
+            type="button"
+            onClick={() => setFilters((v) => !v)}
+            aria-expanded={filters}
+            className="flex w-full items-center justify-between rounded-[0.9rem] px-2 py-2 text-left text-xs text-haze transition-colors duration-300 hover:bg-white/[0.04] hover:text-lunar"
+          >
+            {t.hud.filters}
+            <span className={`transition-transform duration-300 ease-[var(--ease-orbit)] ${filters ? "rotate-180" : ""}`} aria-hidden>
+              ⌄
+            </span>
+          </button>
+          {filters && (
+            <div className="space-y-2 pb-2 animate-[card-in_0.4s_var(--ease-orbit)]">
+              <p className="px-2 text-[11px] text-dim">{t.layers.planes}</p>
+              <Filters layer="planes" />
+              <p className="px-2 text-[11px] text-dim">{t.layers.ships}</p>
+              <Filters layer="ships" />
+            </div>
+          )}
           <button
             type="button"
             onClick={() => {
               engine?.rig.resetOrientation();
               engine?.rig.flyTo({ lat: 20, lon: engine.rig.pose.lon, dist: 4.4 }, 1.6);
             }}
-            className="flex w-full items-center gap-3 rounded-[0.9rem] px-2 py-2 text-left text-sm text-haze transition-colors duration-300 hover:bg-white/[0.04] hover:text-lunar"
+            className="flex w-full items-center gap-3 rounded-[0.9rem] px-2 py-2 text-left text-xs text-haze transition-colors duration-300 hover:bg-white/[0.04] hover:text-lunar"
           >
             <Recenter className="size-4" />
             {t.hud.resetView}
@@ -292,6 +336,7 @@ function ObjectCard({ selection }: { selection: Selection }) {
   const detail = useOrbis((s) => s.selectionDetail);
   const engine = useOrbis((s) => s.engine);
   const select = useOrbis((s) => s.select);
+  const following = useOrbis((s) => s.following);
   const now = useNow(1000);
   const simS = (engine?.clock.now() ?? now) / 1000;
   const clock = useClockFormat();
@@ -384,6 +429,34 @@ function ObjectCard({ selection }: { selection: Selection }) {
       focus = { lat: p.lat, lon: p.lon, dist: p.view };
     }
     note = t.places.items[selection.id].text;
+  } else if (selection.kind === "storm") {
+    const s = engine?.stormNow(selection.id);
+    if (s) {
+      const { storm } = s;
+      const category = stormCategory(storm.windKmh);
+      kicker = category < 0 ? t.storms.kinds.depression : category === 0 ? t.storms.kinds.storm : fill(t.storms.kinds.cyclone, { n: String(category) });
+      title = storm.name;
+      accent = storm.alert === "red" ? "text-seismic" : storm.alert === "orange" ? "text-ember" : "text-aurora";
+      const end = storm.track[storm.track.length - 1].t;
+      rows = [
+        [t.storms.maxWind, `${formatNumber(storm.windKmh, locale)} ${t.units.kmh}`],
+        [t.storms.alert, t.storms.alerts[storm.alert]],
+        [t.card.position, formatLatLon(s.lat, s.lon)],
+        [
+          t.storms.moving,
+          s.heading === null || s.speedKmh === null
+            ? t.storms.outside
+            : s.speedKmh < 3
+              ? t.storms.stationary
+              : fill(t.storms.movingValue, { dir: t.storms.headings[Math.round(s.heading / 45) % 8], speed: formatNumber(s.speedKmh, locale) }),
+        ],
+        [t.storms.forecastTo, `${clock.time(end)} ${clock.label(end)}`],
+      ];
+      if (storm.countries.length) rows.push([t.storms.countries, storm.countries.join(", ")]);
+      note = t.storms.note;
+      focus = { lat: s.lat, lon: s.lon, dist: 2.2 };
+      link = { href: storm.report, label: t.storms.report };
+    }
   } else if (selection.kind === "fire") {
     kicker = t.card.fire;
     title = formatLatLon(selection.lat, selection.lon);
@@ -397,10 +470,7 @@ function ObjectCard({ selection }: { selection: Selection }) {
   }
 
   return (
-    <aside
-      aria-label={title}
-      className="bezel pointer-events-auto absolute right-4 bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] max-h-[calc(100dvh-16rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto animate-[card-in_0.7s_var(--ease-orbit)] md:top-24 md:bottom-auto"
-    >
+    <aside aria-label={title} className="dock-right bezel pointer-events-auto animate-[card-in_0.7s_var(--ease-orbit)]">
       <div className="bezel-core p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -435,6 +505,17 @@ function ObjectCard({ selection }: { selection: Selection }) {
               {selection.kind === "place" ? t.places.flyThere : t.card.focus}
             </button>
           )}
+          {(selection.kind === "satellite" || selection.kind === "plane" || selection.kind === "ship") && (
+            <button
+              type="button"
+              aria-pressed={following}
+              onClick={() => engine?.follow(following ? null : selection)}
+              className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs transition-colors duration-300 ${following ? "border-foil/60 bg-foil text-black" : "border-hairline text-lunar hover:border-foil/50"}`}
+            >
+              <Orbit className="size-3.5" />
+              {following ? t.card.stopRiding : t.card.ride}
+            </button>
+          )}
           {link && (
             <a
               href={link.href}
@@ -457,7 +538,7 @@ function Footnote() {
   const locale = useLocale();
   const cloudsDate = useOrbis((s) => s.cloudsDate);
   return (
-    <div className="absolute right-4 bottom-[max(1rem,env(safe-area-inset-bottom))] hidden max-w-[19rem] flex-col items-end gap-1 text-right text-[11px] leading-snug text-dim xl:flex">
+    <div className="absolute right-4 bottom-[var(--safe-b)] hidden max-w-[19rem] flex-col items-end gap-1 text-right text-[11px] leading-snug text-dim xl:flex">
       <p>{t.hud.hint}</p>
       <p>{cloudsDate ? fill(t.hud.clouds, { date: formatDate(cloudsDate, locale) }) : t.hud.cloudsArchive}</p>
     </div>

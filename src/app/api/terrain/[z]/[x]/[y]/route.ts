@@ -3,7 +3,7 @@ import { fetchUpstream, upstreamError } from "@/lib/http";
 import { gridFromTerrarium, TERRAIN_MAX_LEVEL, TERRAIN_MIN_LEVEL } from "@/lib/terrain";
 
 /**
- * One terrain tile as a 33 × 33 Int16 height grid (~2 KB), decoded from the
+ * One terrain tile as a 65 × 65 Int16 height grid (~8 KB), decoded from the
  * Mapzen Terrarium PNG (~120 KB) on AWS Open Data. Elevation never changes,
  * so the CDN keeps each answer for a year and the PNG is fetched once.
  */

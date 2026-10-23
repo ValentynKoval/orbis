@@ -29,6 +29,21 @@ const NOISE = /* glsl */ `
     f = f * f * (3.0 - 2.0 * f);
     return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x), mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
   }
+  float hash3(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+  }
+  // Value noise over 3D space: on a sphere it has no seam and no pinching at the poles.
+  float noise3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    vec2 e = vec2(1.0, 0.0);
+    float lo = mix(mix(hash3(i), hash3(i + e.xyy), f.x), mix(hash3(i + e.yxy), hash3(i + e.xxy), f.x), f.y);
+    float hi = mix(mix(hash3(i + e.yyx), hash3(i + e.xyx), f.x), mix(hash3(i + e.yxx), hash3(i + e.xxx), f.x), f.y);
+    return mix(lo, hi, f.z);
+  }
 `;
 
 const SURFACE_BASIS = /* glsl */ `
@@ -134,7 +149,8 @@ export const earthFragment = /* glsl */ `
     // Thin atmosphere seen through the limb.
     float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0);
     vec3 sky = mix(vec3(0.28, 0.52, 1.0), vec3(1.0, 0.48, 0.18), twilight);
-    vec3 atmosphere = sky * rim * smoothstep(-0.3, 0.35, ndl) * 0.9 * sunlight;
+    // The limb glow now comes from the scattering pass; keep only a whisper so the edge never looks cut out.
+    vec3 atmosphere = sky * rim * smoothstep(-0.3, 0.35, ndl) * 0.15 * sunlight;
 
     gl_FragColor = vec4(lit + night + atmosphere, 1.0);
     #include <tonemapping_fragment>
@@ -159,7 +175,8 @@ export const cloudsFragment = /* glsl */ `
     float sunlight = sunVisible(normalize(vPosW));
     float mask = texture2D(uClouds, vUv).r;
     // Break the mask's soft edges with value noise so clouds read as texture rather than blur.
-    float detail = noise2(vUv * vec2(1400.0, 700.0)) * 0.6 + noise2(vUv * vec2(3100.0, 1550.0)) * 0.4;
+    vec3 dir = normalize(vPosW);
+    float detail = noise3(dir * 223.0) * 0.6 + noise3(dir * 493.0) * 0.4;
     float edge = mask * (1.0 - mask) * 4.0;
     mask = clamp(mask + (detail - 0.5) * 0.35 * edge, 0.0, 1.0);
     float density = pow(smoothstep(0.08, 1.0, mask), 1.6) * 0.82;
@@ -188,25 +205,91 @@ export const atmosphereVertex = /* glsl */ `
   }
 `;
 
+/**
+ * The atmosphere, ray-marched: Rayleigh and Mie single scattering (Earth radii as the unit, real scale
+ * heights and coefficients). From orbit it draws the thin blue limb and the haze over the disc; from a
+ * leaning camera near the ground, a blue sky that pales toward the horizon; at the terminator, sunset
+ * colours. Additive, over everything drawn before it, with the ground found analytically.
+ */
 export const atmosphereFragment = /* glsl */ `
   uniform vec3 uSun;
   uniform float uOuter;
+  uniform float uIntensity;
   varying vec3 vPosW;
+  #ifndef STEPS
+  #define STEPS 12
+  #endif
+  #ifndef LIGHT_STEPS
+  #define LIGHT_STEPS 5
+  #endif
+  const vec3 BETA_R = vec3(36.95, 86.0, 210.9);
+  const float BETA_M = 133.8;
+  const float H_R = 0.00125;
+  const float H_M = 0.00019;
+  const float G = 0.76;
+  const float PI = 3.14159265;
+
+  vec2 sphere(vec3 o, vec3 d, float r) {
+    float b = dot(o, d);
+    float c = dot(o, o) - r * r;
+    float h = b * b - c;
+    if (h < 0.0) return vec2(1e9, -1e9);
+    h = sqrt(h);
+    return vec2(-b - h, -b + h);
+  }
+
   void main() {
-    vec3 d = normalize(vPosW - cameraPosition);
-    vec3 q = cameraPosition - d * dot(cameraPosition, d);
-    float b = length(q);
-    if (b < 1.0) discard;
-    float h = (b - 1.0) / (uOuter - 1.0);
-    float density = exp(-h * 5.5) * (1.0 - smoothstep(0.85, 1.0, h));
-    float s = dot(normalize(q), uSun);
-    vec3 dayColor = vec3(0.32, 0.6, 1.0);
-    vec3 duskColor = vec3(1.0, 0.45, 0.16);
-    vec3 color = mix(vec3(0.0), dayColor, smoothstep(-0.25, 0.35, s));
-    color += duskColor * exp(-s * s / 0.018) * 0.9;
-    gl_FragColor = vec4(color * density * 1.25, 1.0);
+    vec3 o = cameraPosition;
+    vec3 d = normalize(vPosW - o);
+    vec2 a = sphere(o, d, uOuter);
+    float t0 = max(a.x, 0.0);
+    float t1 = a.y;
+    vec2 g = sphere(o, d, 1.0);
+    if (g.x < g.y && g.x > 0.0) t1 = min(t1, g.x);
+    if (t1 <= t0) discard;
+    float seg = (t1 - t0) / float(STEPS);
+    vec3 sumR = vec3(0.0);
+    vec3 sumM = vec3(0.0);
+    float odR = 0.0;
+    float odM = 0.0;
+    // Interleaved-gradient jitter of the sample points (along the view and toward the Sun) turns the steps'
+    // banding, which near the terminator would draw arcs across the land, into fine, invisible grain.
+    float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    for (int i = 0; i < STEPS; i++) {
+      vec3 p = o + d * (t0 + seg * (float(i) + jitter));
+      float h = max(length(p) - 1.0, 0.0);
+      float dR = exp(-h / H_R) * seg;
+      float dM = exp(-h / H_M) * seg;
+      odR += dR;
+      odM += dM;
+      // In the Earth's shadow no sunlight reaches this sample.
+      vec2 ground = sphere(p, uSun, 1.0);
+      if (ground.x < ground.y && ground.x > 0.0) continue;
+      float ls = sphere(p, uSun, uOuter).y / float(LIGHT_STEPS);
+      float lR = 0.0;
+      float lM = 0.0;
+      for (int j = 0; j < LIGHT_STEPS; j++) {
+        float hq = max(length(p + uSun * ls * (float(j) + jitter)) - 1.0, 0.0);
+        lR += exp(-hq / H_R) * ls;
+        lM += exp(-hq / H_M) * ls;
+      }
+      vec3 att = exp(-(BETA_R * (odR + lR) + BETA_M * 1.1 * (odM + lM)));
+      sumR += att * dR;
+      sumM += att * dM;
+    }
+    float mu = dot(d, uSun);
+    float phaseR = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+    float phaseM = 3.0 / (8.0 * PI) * ((1.0 - G * G) * (1.0 + mu * mu)) / ((2.0 + G * G) * pow(1.0 + G * G - 2.0 * G * mu, 1.5));
+    vec3 color = uIntensity * (sumR * BETA_R * phaseR + sumM * BETA_M * phaseM);
+    // Whatever lies behind is seen through the air, dimmed by the path's transmittance. The frame is already
+    // display-encoded, where adding light would wash a sunlit desert out; so the air is laid on as a veil of
+    // its own colour (the in-scatter a fully hazed path would reach), as opaque as the share of light it hides.
+    vec3 transmittance = exp(-(BETA_R * odR + BETA_M * 1.1 * odM));
+    float veil = clamp(1.0 - dot(transmittance, vec3(1.0 / 3.0)), 0.0, 1.0);
+    gl_FragColor = vec4(color / max(veil, 1e-3), 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
+    gl_FragColor = vec4(gl_FragColor.rgb * veil, veil);
   }
 `;
 

@@ -24,6 +24,25 @@
   --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/*
+ * The live HUD's layout: a header row (and below lg a second row of buttons), a timeline at the bottom,
+ * and two docks between them, layers on the left and one panel or card on the right. On phones the
+ * docks become one bottom sheet above the timeline. Every floating element is placed from these tokens,
+ * so nothing ever lands on anything else.
+ */
+:root {
+  --safe-t: max(1rem, env(safe-area-inset-top));
+  --safe-b: max(1rem, env(safe-area-inset-bottom));
+  --dock-top: calc(var(--safe-t) + 4.75rem);
+  --timeline-h: 6.75rem;
+  --dock-bottom: calc(var(--safe-b) + var(--timeline-h) + 0.75rem);
+}
+@media (max-width: 1023px) {
+  :root {
+    --dock-top: calc(var(--safe-t) + 8.5rem);
+  }
+}
+
 @layer base {
   html {
     background: var(--color-space);
@@ -71,6 +90,39 @@
 
   .readout {
     font-variant-numeric: tabular-nums;
+  }
+
+  .dock-left,
+  .dock-right {
+    position: absolute;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(232 236 244 / 0.15) transparent;
+  }
+  .dock-left {
+    left: 1rem;
+    top: var(--dock-top);
+    width: min(18.5rem, calc(100vw - 2rem));
+    max-height: calc(100dvh - var(--dock-top) - var(--dock-bottom));
+  }
+  .dock-right {
+    right: 1rem;
+    top: var(--dock-top);
+    width: min(23rem, calc(100vw - 2rem));
+    max-height: calc(100dvh - var(--dock-top) - var(--dock-bottom));
+  }
+  /* Phones: both docks are the same bottom sheet, above the timeline. */
+  @media (max-width: 767px) {
+    .dock-left,
+    .dock-right {
+      left: 1rem;
+      right: 1rem;
+      top: auto;
+      bottom: var(--dock-bottom);
+      width: auto;
+      max-height: min(58dvh, calc(100dvh - var(--dock-top) - var(--dock-bottom)));
+    }
   }
 
   /* Scene hand-over: HUD groups drift away and back; hidden ones become invisible to pointers and readers. */

@@ -1,7 +1,8 @@
 import { gzipSync } from "node:zlib";
-import { connection, type NextRequest } from "next/server";
+import { after, connection, type NextRequest } from "next/server";
 import { cacheHeaders, upstreamError } from "@/lib/http";
 import { fallbackFor, shipsFor } from "@/lib/feeds/fallback";
+import { pending } from "@/lib/feeds/aisSampler";
 
 /**
  * Proxies the relay (a Cloudflare Worker). workers.dev is blocked by some
@@ -34,6 +35,9 @@ export async function GET(_request: NextRequest, { params }: RouteContext<"/api/
   if (path.startsWith("ships")) {
     try {
       const body = await shipsFor(path);
+      // The next listen runs after this response, so the visitor never waits for it.
+      const work = pending();
+      if (work) after(() => work);
       if (body !== null) return gzipJson(body, route[1], "ais");
       if (path !== "ships" && path !== "ships/names") return Response.json({ error: "Not found" }, { status: 404, headers: cacheHeaders(30) });
     } catch {

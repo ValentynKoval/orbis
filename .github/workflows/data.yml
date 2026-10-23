@@ -1,9 +1,10 @@
 name: Refresh data branch
 
 # Everything the site reads from the `data` branch: CelesTrak element sets
-# (one client, one download per 2-hour update, as CelesTrak requires) and the
-# cloud mask built from NASA GIBS. Runs every two hours; clouds are rebuilt
-# when their mosaic date changed.
+# (one client, one download per 2-hour update, as CelesTrak requires), the
+# cloud mask built from NASA GIBS, the wind field from NOAA GFS and the active
+# tropical cyclones from GDACS. Runs every two hours; clouds are rebuilt when
+# their mosaic date changed, wind when a new GFS cycle (every six hours) is out.
 on:
   schedule:
     - cron: "23 */2 * * *"
@@ -49,6 +50,12 @@ jobs:
           have=$(node -e "try{console.log(require('./data/clouds/meta.json').date)}catch{console.log('')}")
           if [ "$want" = "$have" ]; then echo "clouds up to date ($have)"; exit 0; fi
           node scripts/cloud-mask.mjs data/clouds || echo "cloud mask failed; keeping the previous one"
+
+      - name: Build wind field
+        run: node scripts/wind-field.mjs data/wind || echo "wind field failed; keeping the previous one"
+
+      - name: Collect tropical cyclones
+        run: node scripts/storms.mjs data/storms || echo "storms failed; keeping the previous file"
 
       - name: Commit
         run: |

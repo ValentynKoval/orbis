@@ -23,6 +23,8 @@ const LISTEN_EVERY_MS = 90_000;
 /** A cold store listens longer so the first answer is not sparse. */
 const LISTEN_COLD_MS = 15_000;
 const LISTEN_WARM_MS = 7_000;
+/** The only listen a visitor waits for: an empty cold store. */
+const LISTEN_QUICK_MS = 4_000;
 const SEED_MAX_AGE_S = 3600;
 
 const store = new ShipStore();
@@ -132,10 +134,20 @@ function listen(apiKey: string, ms: number): Promise<ShipUpdates> {
   });
 }
 
-/** The store, refreshed by a short listen when due. Without a key it only holds the workflow's snapshot. */
+/**
+ * The store, refreshed by a listen when due. Visitors never wait for the regular listen: it runs after
+ * the response (the route hands `pending()` to Next's `after`). Only a store with almost nothing in
+ * it, on a cold instance with no relay and no recent snapshot, waits a few seconds for a quick first catch.
+ */
 export async function sampledShips(): Promise<ShipStore> {
   const apiKey = process.env.AISSTREAM_API_KEY;
   if (store.size === 0) await seed();
+  if (apiKey && store.size < 800 && !listening) {
+    listening = listen(apiKey, LISTEN_QUICK_MS)
+      .then(share)
+      .finally(() => (listening = null));
+    await listening;
+  }
   const now = Date.now();
   if (apiKey && !listening && now - lastListen > LISTEN_EVERY_MS) {
     const ms = store.size > 4000 ? LISTEN_WARM_MS : LISTEN_COLD_MS;
@@ -146,7 +158,11 @@ export async function sampledShips(): Promise<ShipStore> {
         listening = null;
       });
   }
-  if (listening) await listening;
   store.prune(Math.floor(Date.now() / 1000));
   return store;
+}
+
+/** The listen in progress, if any, for the route to keep alive after it has answered. */
+export function pending(): Promise<void> | null {
+  return listening;
 }

@@ -35,17 +35,21 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
   at real size and real positions (JPL elements), the Moon, ~900 large asteroids and famous or currently active
   comets from NASA/JPL, with orbits, labels, close-approach lists and a clock that runs at up to a month per second.
 - **Mountains in 3D.** Zoomed in, each tile is raised by real elevation (Mapzen Terrarium, 1.6×) and lit by its slopes; the camera leans toward the horizon as it descends (right-drag, Ctrl-drag, Q/E and R/F turn and tilt it) and never flies into a ridge.
-- **Fast streets.** Tiles load target-first: the level the view needs is requested at once, nearest the centre first, 18 at a time, with stale requests cancelled and images decoded off the main thread. Elevation comes as 2 KB height grids from the site's own CDN instead of 120 KB PNGs, one grid per 16 tiles. Flights prefetch their destination, and a service worker keeps tiles between visits.
+- **Fast streets.** Tiles load target-first: the level the view needs is requested at once, nearest the centre first, 28 at a time over HTTP/2, with stale requests cancelled, images decoded off the main thread and GPU uploads spread over frames. The wheel and pinch zoom toward the cursor and prefetch where the zoom is heading, so a city is already loading before the camera arrives. Elevation comes as 8 KB height grids from the site's own CDN instead of 120 KB PNGs, one grid per 64 tiles. Flights prefetch their destination, and a service worker keeps tiles between visits.
 - **Landmarks.** 30 pins with their stories in both languages: the highest, lowest and farthest points of the planet, the deepest hole and the hottest and coldest places, natural wonders, the pads spaceflight started from, and where space rocks struck.
 - **Tap anywhere.** Any spot of the globe opens a card with its name (OpenStreetMap), ground height or ocean depth, local time, sunrise and sunset, and the weather now.
 - **The real sky.** 5,044 stars at their catalogue positions and colours, the 88 constellation figures, and the Milky Way from Gaia, in both scenes; the planets, Moon and Sun stand among the right stars.
 - **Eclipses.** Found in the browser from the site's own ephemerides (checked against NASA's catalogue to a few minutes). The Moon's shadow darkens the Earth and switches on the streetlights in the umbra; the Moon turns red in the Earth's shadow. One button runs the clock through the next eclipses.
 - **Your time.** Every clock shows the visitor's time zone ("UTC+3"); a click switches to UTC.
 - **Live weather.** RainViewer radar painted over the terrain, refreshed every 10 minutes, and Open-Meteo conditions for your place.
+- **The wind, everywhere.** NOAA GFS 10 m wind (decoded from GRIB2, complex packing and all, by the site's own reader) drives tens of thousands of particles on the GPU. Their positions live in a texture, a ring of history slices records their recent path, and each tail is drawn as real line segments on a shell around the planet: sharp at any zoom, glued to the ground, a few milliseconds a frame even on integrated graphics.
+- **Tropical cyclones.** Every active storm from GDACS (UN and European Commission): a swirl turning the right way for its hemisphere, sized by its wind and coloured by its alert level, the track it took, the official forecast and the cone of uncertainty. Storms move along their tracks with the timeline; the card gives the category, wind, motion and the countries in its path.
+- **A real atmosphere.** Single scattering (Rayleigh and Mie) ray-marched per pixel: blue haze over the disc, a thin limb, sunsets along the terminator, and aerial perspective in tilted views, blended as a veil of its own colour so a sunlit desert keeps its colour.
+- **Ride along.** Any satellite, aircraft or ship can be followed: the camera sits behind it at its height, looking along its course.
 - **Deep space.** Voyager 1 and 2, New Horizons, JWST, Parker Solar Probe and Europa Clipper from JPL Horizons, with their paths a year behind and ahead.
 - **One continuous zoom.** The Earth scene runs out to 400 Earth radii with the Sun, Moon and planets already in the sky, then hands over to the heliocentric scene mid-flight: the camera keeps its distance, direction and easing, data layers thin out long before the switch, labels carry across and the HUD cross-fades, so nothing jumps.
 - **Flights between worlds.** Choosing a planet glides the orbit centre from one body to the next while the camera pulls back and dives, instead of cutting. Labels step aside from each other and from the edges of the screen.
-- **Guided tour.** One button (or `/live?tour=1`) flies through everything live: the ISS, the busiest sky and sea lanes, the strongest quake of the day, fires, city lights, the aurora oval, then out past the Moon to Saturn, Voyager 1 and a month-per-second view of the inner solar system, and home. Touching the controls ends it.
+- **Guided tour.** One button (or `/live?tour=1`) flies through everything live: the ISS, the busiest sky and sea lanes, the strongest quake of the day, the strongest storm, fires, city lights, the aurora oval, then out past the Moon to Saturn, Voyager 1 and a month-per-second view of the inner solar system, and home. Touching the controls ends it.
 - **The Sun, live.** The Sun's card shows SDO's latest AIA 304 Å frame and the solar wind at L1 (speed, field strength, Bz) from NOAA SWPC.
 - **Aurora.** NOAA's OVATION forecast drawn as curtains over the night side, with the live Kp index.
 - **The sky above me.** The Moon's phase and the planets above the horizon, ISS passes for your place over the next two days (naked-eye visibility included) and what is
@@ -60,7 +64,7 @@ Live: https://orbis-live.vercel.app · Case study: https://orbis-live.vercel.app
   ten minutes and publishes a snapshot the relay ingests) plus Finland's Digitraffic, coloured by type (cargo, tanker,
   passenger, fishing, leisure, service), with destination, size and a four-hour track. Between snapshots they keep
   moving along their course.
-- **Search and filters.** One box (`/` or Ctrl+K) finds satellites, flights, ships and quakes and flies there;
+- **Search and filters.** One box (`/` or Ctrl+K) finds satellites, flights, ships, quakes, cyclones and landmarks and flies there;
   aircraft can be filtered by altitude, ships by type.
 - **Time machine.** A 24-hour timeline: scrub to any moment or play it back at 60× or 600×. Satellites are
   re-propagated for that instant, the terminator and quakes follow, and aircraft and ships come from 5-minute frames
@@ -104,9 +108,9 @@ scripts/             asset pipeline for NASA and Natural Earth imagery, the AIS 
 ## Data and costs
 
 Everything is free and non-commercial. Visitors never call the data providers directly: each feed is fetched by a
-server route and cached on the CDN (USGS for a minute, FIRMS for 30 minutes, clouds for six hours), and CelesTrak is
-read only by a scheduled GitHub Action that keeps a copy on the `data` branch, respecting CelesTrak's
-one-download-per-update rule. Full credits are on the site's Sources page.
+server route and cached on the CDN (USGS for a minute, FIRMS for 30 minutes, clouds for six hours), and CelesTrak,
+NOAA GFS and GDACS are read only by a scheduled GitHub Action that keeps small copies on the `data` branch (CelesTrak's
+one-download-per-update rule; GRIB2 decoding and the heavy GDACS geometry stay out of visitors' way). Full credits are on the site's Sources page.
 
 | Data | Source | Licence |
 | --- | --- | --- |
@@ -122,6 +126,8 @@ one-download-per-update rule. Full credits are on the site's Sources page.
 | Earthquakes | USGS Earthquake Hazards Program | Public domain |
 | Fires | NASA FIRMS (LANCE) | Free, attribution |
 | Clouds | NASA GIBS | Free, attribution |
+| Wind | NOAA GFS (NOMADS) | Public domain |
+| Tropical cyclones | GDACS (UN, European Commission JRC) | Free, attribution |
 | Stars, constellations | d3-celestial (Yale Bright Star Catalogue) | BSD 3-clause |
 | Milky Way | NASA/Goddard SVS Deep Star Maps 2020, ESA/Gaia/DPAC | Free, attribution |
 | Place names | OpenStreetMap via Nominatim | ODbL 1.0 |
@@ -149,3 +155,4 @@ suite (desktop and phone) against that build. `npm run assets` regenerates the t
 6. Terrain, rain radar, spacecraft, a continuous Earth-to-system hand-over, faster first paint. *(done)*
 7. Cinematic flights, a guided tour, the live Sun, labels that never overlap. *(done)*
 8. Faster streets, landmarks, tap-anywhere cards, tilted 3D views, the real sky, eclipses, local time. *(done)*
+9. Zoom to the cursor, a docked layout, a scattering atmosphere, ride-along, GPU wind, tropical cyclones. *(done)*

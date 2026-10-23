@@ -150,8 +150,30 @@ export class CameraRig {
     other.glideState = null;
   }
 
+  /** While following an object the follower sets the lean outright; null hands it back to altitude and visitor. */
+  tiltOverride: number | null = null;
+  /** Height above sea level (Earth radii) the view pivots on, instead of the ground: an aircraft, a satellite. */
+  pivotAltitude: number | null = null;
+
+  /**
+   * Chase-camera step: aims the goal at a pose, a heading and a lean, eased like any other motion. Called
+   * every frame by whatever is being followed.
+   */
+  track(pose: CameraPose, heading: number, tilt: number) {
+    this.goal.lat = pose.lat;
+    this.goal.lon = this.pose.lon + wrap(pose.lon - this.pose.lon);
+    this.goal.dist = pose.dist;
+    this.headingGoal = this.heading + (((heading - this.heading) % 360) + 540) % 360 - 180;
+    this.tiltOverride = tilt;
+    this.glideState = null;
+    this.flyUntil = 0;
+    this.stiffness = 5;
+  }
+
   /** North up and the automatic lean only. */
   resetOrientation() {
+    this.tiltOverride = null;
+    this.pivotAltitude = null;
     this.tiltUser = 0;
     this.headingGoal = Math.round(this.heading / 360) * 360;
   }
@@ -219,7 +241,7 @@ export class CameraRig {
     this.heading += (this.headingGoal - this.heading) * ka;
     // The visitor's extra lean fades out with altitude, so leaving the ground always ends looking straight down.
     const lean = this.radius > 0 ? this.tiltUser * (1 - THREE.MathUtils.smoothstep(this.pose.dist, 1.05, 1.4)) : 0;
-    const tiltGoal = THREE.MathUtils.clamp(this.autoTilt() + lean, 0, 75);
+    const tiltGoal = this.tiltOverride ?? THREE.MathUtils.clamp(this.autoTilt() + lean, 0, 75);
     this.tilt += (tiltGoal - this.tilt) * ka;
 
     if (this.tilt < 0.05 && Math.abs(this.heading % 360) < 0.05) {
@@ -230,7 +252,7 @@ export class CameraRig {
     } else {
       // Pivot on the ground point under the pose; the camera stays the same distance from it, leaning
       // back against the heading by the tilt angle.
-      const ground = this.radius + (this.ground?.(this.pose.lat, this.pose.lon) ?? 0);
+      const ground = this.radius + (this.pivotAltitude ?? this.ground?.(this.pose.lat, this.pose.lon) ?? 0);
       const t = latLonToVec(this.pose.lat, this.pose.lon, ground);
       const target = new THREE.Vector3(t[0], t[1], t[2]);
       const up = target.clone().normalize();
@@ -305,7 +327,10 @@ export class CameraRig {
       const angle = Math.atan2(b.y - a.y, b.x - a.x);
       if (this.pinchDist > 0) {
         const altitude = this.goal.dist - this.radius;
-        this.goal.dist = this.radius + altitude * (this.pinchDist / d);
+        const factor = this.pinchDist / d;
+        this.zoomToward((a.x + b.x) / 2, (a.y + b.y) / 2, factor);
+        this.goal.dist = this.radius + altitude * factor;
+        this.announceGoal();
         if (this.radius > 0) {
           let turn = angle - this.pinchAngle;
           if (turn > Math.PI) turn -= 2 * Math.PI;
@@ -431,10 +456,42 @@ export class CameraRig {
     e.preventDefault();
     const altitude = this.goal.dist - this.radius;
     const delta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-    this.goal.dist = this.radius + altitude * Math.exp(delta * 0.0012);
+    const factor = Math.exp(delta * 0.0012);
+    this.zoomToward(e.clientX, e.clientY, factor);
+    this.goal.dist = this.radius + altitude * factor;
     this.flyUntil = 0;
     this.glideState = null;
     this.stiffness = 8;
+    this.announceGoal();
     this.onUserMove?.();
   };
+
+  private lastAnnounce = 0;
+  /** Lets the tile layer start on the destination of a manual zoom, at most every 120 ms. */
+  private announceGoal() {
+    const now = performance.now();
+    if (now - this.lastAnnounce < 120) return;
+    this.lastAnnounce = now;
+    this.onFly?.(this.goal);
+  }
+
+  private ray = new THREE.Raycaster();
+  private hit = new THREE.Vector3();
+  /**
+   * Keeps the ground under the cursor under the cursor while zooming, as map apps do: the goal slides
+   * toward that point by the zoom factor. Only near the globe (from orbit the whole planet is in view).
+   */
+  private zoomToward(clientX: number, clientY: number, factor: number) {
+    if (this.radius <= 0 || this.goal.dist > this.radius * 3) return;
+    const rect = this.el.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.ray.setFromCamera(ndc, this.camera);
+    if (!this.ray.ray.intersectSphere(new THREE.Sphere(new THREE.Vector3(), this.radius), this.hit)) return;
+    const r = this.hit.length();
+    const lat = THREE.MathUtils.radToDeg(Math.asin(this.hit.y / r));
+    const lon = THREE.MathUtils.radToDeg(Math.atan2(-this.hit.z, this.hit.x));
+    const k = 1 - Math.min(1.5, factor);
+    this.goal.lat += (lat - this.goal.lat) * k;
+    this.goal.lon += wrap(lon - this.goal.lon) * k;
+  }
 }

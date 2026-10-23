@@ -52,6 +52,7 @@ export function PlaceLabels() {
   const engine = useOrbis((s) => s.engine);
   const select = useOrbis((s) => s.select);
   const selected = useOrbis((s) => (s.selection?.kind === "place" ? s.selection.id : null));
+  const space = useOrbis((s) => s.space);
   const refs = useRef(new Map<string, HTMLButtonElement>());
   const labels = useRef(new Map<string, HTMLSpanElement>());
 
@@ -62,7 +63,8 @@ export function PlaceLabels() {
   }, [engine, t]);
 
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+    // Pins belong to the Earth; in the heliocentric scene they fade away with the rest of the Earth HUD.
+    <div className={`pointer-events-none absolute inset-0 overflow-hidden transition-opacity duration-700 ${space === "earth" ? "opacity-100" : "invisible opacity-0"}`}>
       {PLACES.map((p) => (
         <button
           key={p.id}

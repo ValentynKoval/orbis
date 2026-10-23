@@ -24,6 +24,9 @@ import { Moon } from "./layers/Moon";
 import { Aurora } from "./layers/Aurora";
 import { SkyBodies } from "./layers/SkyBodies";
 import { Celestial } from "./layers/Celestial";
+import { Wind } from "./layers/Wind";
+import { Storms } from "./layers/Storms";
+import { stormAt, type Storm } from "@/lib/feeds/storms";
 import { EXIT_FLOOR_AU, HANDOVER_RADII, SolarSystem, type BodyRef } from "./SolarSystem";
 import { EARTH_RADIUS_AU } from "@/lib/orbits";
 import type { BodyRecord } from "@/lib/feeds/bodies";
@@ -41,6 +44,10 @@ const REFRESH_MS: Record<FeedKey, number> = {
   clouds: 6 * 3600_000,
   aurora: 10 * 60_000,
   rain: 10 * 60_000,
+  // GFS runs every six hours.
+  wind: 3 * 3600_000,
+  // GDACS updates advisories every six hours; the data workflow collects them every two.
+  storms: 30 * 60_000,
 };
 const RETRY_MS = 45_000;
 /** Scene hand-over with a little hysteresis: out past ENTER radii the heliocentric scene takes over, back inside EXIT the Earth scene does. */
@@ -76,6 +83,10 @@ export class Engine {
   readonly traffic = new Traffic();
   private tiles: Tiles;
   private rain: Tiles;
+  private wind: Wind;
+  private storms = new Storms();
+  /** The wind field downloads the first time the layer is switched on. */
+  private windScheduled = false;
   /** Closest approach to sea level, in Earth radii; terrain under the camera raises it. */
   private baseMinDist = 1.0024;
   private moon: Moon;
@@ -130,7 +141,7 @@ export class Engine {
     this.textureSize = !options.lite && this.renderer.capabilities.maxTextureSize >= 4096 ? "4k" : "2k";
     this.coarse = window.matchMedia("(pointer: coarse)").matches;
 
-    this.planet = new Planet(options.lite ? 112 : 192);
+    this.planet = new Planet(options.lite ? 112 : 192, options.lite);
     this.satellites = new Satellites(pixelRatio);
     this.fires = new Fires(pixelRatio);
     const providers: ImageryProvider[] = [EOX];
@@ -139,7 +150,7 @@ export class Engine {
     const anisotropyMax = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     this.tiles = new Tiles(providers, this.planet.earthMaterial.uniforms, anisotropyMax, { terrain: true, lite: options.lite });
     this.rain = new Tiles([], {}, 2, { overlay: true, lift: 6e-5, lite: true });
-    this.rain.group.renderOrder = 0.6;
+    this.wind = new Wind(options.lite);
     this.moon = new Moon(this.planet.sun);
     this.aurora = new Aurora(this.planet.sun);
     this.sky = new SkyBodies(pixelRatio);
@@ -184,7 +195,9 @@ export class Engine {
       this.fires.points,
       this.quakes.mesh,
       this.aurora.mesh,
+      this.storms.group,
       this.planet.clouds,
+      this.wind.group,
       this.traffic.ships.mesh,
       this.traffic.planes.mesh,
       this.traffic.track,
@@ -202,6 +215,8 @@ export class Engine {
     // Sub-metre imagery lets the camera descend to a few hundred metres; 10 m imagery stops it ~13 km up.
     this.baseMinDist = esriKey ? 1.0004 : 1.0024;
     this.rig.minDist = this.baseMinDist;
+    this.rig.onUserMove = this.handleUserMove;
+    this.system.rig.onUserMove = this.handleUserMove;
     this.rig.onTap = (x, y) => {
       const hit = this.pick(x, y);
       const ground = hit ? null : this.groundAt(x, y);
@@ -285,10 +300,12 @@ export class Engine {
     this.schedule("planes", () => this.loadPlanes());
     this.schedule("ships", () => this.loadShips());
     this.schedule("quakes", () => this.loadQuakes());
+    this.schedule("storms", () => this.loadStorms());
     this.schedule("fires", () => this.loadFires());
     this.schedule("clouds", () => this.loadClouds());
     this.schedule("aurora", () => this.loadAurora());
     this.schedule("rain", () => this.loadRain());
+    if (useOrbis.getState().layers.wind) this.scheduleWind();
     this.loadBorders();
   }
 
@@ -306,6 +323,8 @@ export class Engine {
     this.traffic.dispose();
     this.tiles.disposeAll();
     this.rain.disposeAll();
+    this.wind.dispose();
+    this.storms.dispose();
     this.moon.dispose();
     this.aurora.dispose();
     this.sky.dispose();
@@ -327,6 +346,13 @@ export class Engine {
 
   setLayerVisible(key: LayerKey, visible: boolean) {
     this.opacity[key].target = visible ? 1 : 0;
+    if (key === "wind" && visible) this.scheduleWind();
+  }
+
+  private scheduleWind() {
+    if (this.windScheduled) return;
+    this.windScheduled = true;
+    this.schedule("wind", () => this.loadWind());
   }
 
   /** Landing chapters dim every data layer except the one being talked about. */
@@ -339,6 +365,7 @@ export class Engine {
     this.satellites.select(selection?.kind === "satellite" ? selection.index : -1, now);
     this.traffic.planes.select(selection?.kind === "plane" ? this.traffic.planes.indexOf(selection.id) : -1);
     this.traffic.ships.select(selection?.kind === "ship" ? this.traffic.ships.indexOf(selection.id) : -1);
+    this.storms.select(selection?.kind === "storm" ? selection.id : null);
     this.traffic.clearTrack();
     if (selection?.kind === "plane" || selection?.kind === "ship") this.loadTrack(selection);
     this.reticle.visible = !!selection;
@@ -500,6 +527,9 @@ export class Engine {
     for (const q of useOrbis.getState().quakes) {
       out.push({ kind: "quake", key: q.id, label: q.place, sub: `M${q.mag.toFixed(1)}`, terms: [q.place] });
     }
+    for (const s of this.storms.storms) {
+      out.push({ kind: "storm", key: s.id, label: s.name, sub: `${s.windKmh} km/h`, terms: [s.name] });
+    }
     return out;
   }
 
@@ -524,6 +554,13 @@ export class Engine {
       if (info) this.rig.flyTo({ lat: info.lat, lon: info.lon, dist: 1.5 }, 1.6);
     } else if (kind === "place") {
       this.flyToPlace(String(key));
+    } else if (kind === "storm") {
+      const storm = this.storms.storms.find((s) => s.id === key);
+      if (!storm) return;
+      store.select({ kind: "storm", id: storm.id });
+      // A storm outside the shown time is flown to where it was last (or will first be) tracked.
+      const at = stormAt(storm, now) ?? storm.track[now < storm.track[0].t ? 0 : storm.track.length - 1];
+      this.rig.flyTo({ lat: at.lat, lon: at.lon, dist: 2.2 }, 1.6);
     } else {
       const quake = store.quakes.find((q) => q.id === key);
       if (!quake) return;
@@ -532,14 +569,106 @@ export class Engine {
     }
   }
 
+  /**
+   * A storm as the card shows it: its record, where its centre is at the shown time, and its motion over
+   * the next three hours (bearing in degrees, speed in km/h). Null when the storm is unknown.
+   */
+  stormNow(id: number): { storm: Storm; lat: number; lon: number; heading: number | null; speedKmh: number | null } | null {
+    const storm = this.storms.storms.find((s) => s.id === id);
+    if (!storm) return null;
+    const now = this.clock.now();
+    const at = stormAt(storm, now);
+    if (!at) {
+      const last = storm.track[now < storm.track[0].t ? 0 : storm.track.length - 1];
+      return { storm, lat: last.lat, lon: last.lon, heading: null, speedKmh: null };
+    }
+    const ahead = stormAt(storm, now + 3 * 3600_000) ?? stormAt(storm, now - 3 * 3600_000);
+    if (!ahead) return { storm, ...at, heading: null, speedKmh: null };
+    const forward = stormAt(storm, now + 3 * 3600_000) !== null;
+    const [from, to] = forward ? [at, ahead] : [ahead, at];
+    const f1 = THREE.MathUtils.degToRad(from.lat);
+    const f2 = THREE.MathUtils.degToRad(to.lat);
+    const dl = THREE.MathUtils.degToRad(to.lon - from.lon);
+    const heading = (THREE.MathUtils.radToDeg(Math.atan2(Math.sin(dl) * Math.cos(f2), Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl))) + 360) % 360;
+    return { storm, ...at, heading, speedKmh: haversineKm(from.lat, from.lon, to.lat, to.lon) / 3 };
+  }
+
+  /** The strongest tropical cyclone active at the shown time, for the tour; null when there is none. */
+  get strongestStorm(): { id: number; lat: number; lon: number } | null {
+    let best: { id: number; lat: number; lon: number; wind: number } | null = null;
+    for (const { storm, at } of this.storms.positions()) {
+      if (best && storm.windKmh <= best.wind) continue;
+      const p = vecToLatLon([at.x, at.y, at.z]);
+      best = { id: storm.id, lat: p.lat, lon: p.lon, wind: storm.windKmh };
+    }
+    return best && { id: best.id, lat: best.lat, lon: best.lon };
+  }
+
   get stats() {
     return { satellites: this.satellites.count };
   }
 
   /** Called when the visitor takes the controls in either scene (the tour stops itself). */
   watchUser(fn: (() => void) | null) {
-    this.rig.onUserMove = fn;
-    this.system.rig.onUserMove = fn;
+    this.userMove = fn;
+  }
+
+  private userMove: (() => void) | null = null;
+  /** Any drag, pinch, wheel or key ends a ride-along and tells whoever is watching (the tour). */
+  private handleUserMove = () => {
+    if (this.following) this.follow(null);
+    this.userMove?.();
+  };
+
+  /** The object the camera rides along with. */
+  private following: Selection | null = null;
+
+  /**
+   * Rides along with a satellite, aircraft or ship: the camera sits behind it, at its height, looking
+   * along its course, and keeps pace in real time (or replay time). Null hands the camera back.
+   */
+  follow(selection: Selection | null) {
+    this.following = selection && (selection.kind === "satellite" || selection.kind === "plane" || selection.kind === "ship") ? selection : null;
+    // Ending a ride eases the view back to north-up and the usual lean.
+    if (!this.following) this.rig.resetOrientation();
+    useOrbis.setState({ following: !!this.following });
+  }
+
+  private updateFollow(sim: number) {
+    const sel = this.following;
+    if (!sel) return;
+    if (useOrbis.getState().selection !== sel) return this.follow(null);
+    const ahead = 4000;
+    let now: Vec3 | null = null;
+    let next: Vec3 | null = null;
+    if (sel.kind === "satellite") {
+      const a = this.satellites.positionOf(sel.index, sim);
+      const b = this.satellites.positionOf(sel.index, sim + ahead);
+      if (a && b) {
+        now = rotateY(a, -gmst(sim));
+        next = rotateY(b, -gmst(sim + ahead));
+      }
+    } else if (sel.kind === "plane" || sel.kind === "ship") {
+      const layer = sel.kind === "plane" ? this.traffic.planes : this.traffic.ships;
+      const i = layer.indexOf(sel.id);
+      if (i >= 0) {
+        now = layer.displayed(i, sim / 1000);
+        next = layer.displayed(i, (sim + ahead) / 1000);
+      }
+    }
+    if (!now || !next) return;
+    const p = vecToLatLon(now);
+    const q = vecToLatLon(next);
+    const f1 = THREE.MathUtils.degToRad(p.lat);
+    const f2 = THREE.MathUtils.degToRad(q.lat);
+    const dl = THREE.MathUtils.degToRad(q.lon - p.lon);
+    const moved = Math.abs(q.lat - p.lat) + Math.abs(q.lon - p.lon) > 1e-7;
+    const heading = moved ? THREE.MathUtils.radToDeg(Math.atan2(Math.sin(dl) * Math.cos(f2), Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl))) : this.rig.heading;
+    const altitude = sel.kind === "ship" ? 0 : Math.max(0, p.r - 1);
+    // Behind and a little above: farther back for faster, higher things.
+    const [range, tilt] = sel.kind === "satellite" ? [0.012, 74] : sel.kind === "plane" ? [0.0026, 74] : [0.0009, 64];
+    this.rig.pivotAltitude = altitude;
+    this.rig.track({ lat: p.lat, lon: p.lon, dist: 1 + altitude + range }, heading, tilt);
   }
 
   /** Catalogue index of the ISS, or −1 until the element sets have loaded. */
@@ -568,6 +697,7 @@ export class Engine {
     this.planet.moon.set(...this.moon.position);
     this.sky.update(sim, this.planet.sun, rotation, this.clockSeconds, this.rig.pose.dist);
 
+    this.updateFollow(sim);
     this.rig.update(dt, this.width, this.height);
     // Zooming out past the hand-over point, still heading out, hands over to the heliocentric scene mid-motion.
     if (this.rig.pose.dist > ENTER_RADII && this.rig.goal.dist >= this.rig.pose.dist) {
@@ -582,15 +712,19 @@ export class Engine {
       this.camera.updateProjectionMatrix();
     }
     this.animateOpacity(dt);
-    this.tiles.update(this.camera, this.height, this.rig.pose.dist);
+    this.tiles.update(this.camera, this.height, this.rig.pose.dist, this.rig.goal.dist);
     this.rain.update(this.camera, this.height, this.rig.pose.dist);
+    // The streaks are a view of the weather system: they bow out in close, where the 1° field has no more to tell.
+    const windRange = THREE.MathUtils.smoothstep(this.rig.pose.dist, 1.1, 1.3) * (1 - THREE.MathUtils.smoothstep(this.rig.pose.dist, 12, 30));
+    this.wind.update(this.renderer, dt, this.opacity.wind.value * windRange);
     // Never fly into a mountain: the floor follows the terrain under the camera.
     const foot = vecToLatLon([this.camera.position.x, this.camera.position.y, this.camera.position.z]);
     // Leaning views pivot on the ground under the pose; keep the camera itself clear of the terrain beneath it.
     const under = this.tiles.heightAt(foot.lat, foot.lon) / 6_371_000;
     const pivot = this.tiles.heightAt(this.rig.pose.lat, this.rig.pose.lon) / 6_371_000;
     const clearance = Math.max(this.baseMinDist - 1, under - pivot + 300 / 6_371_000);
-    this.rig.minDist = 1 + pivot + clearance / Math.max(0.25, Math.cos(THREE.MathUtils.degToRad(this.rig.tilt)));
+    // Riding along, the follower keeps the camera at the object's height; only the imagery floor applies.
+    this.rig.minDist = this.following ? 1.0002 : 1 + pivot + clearance / Math.max(0.25, Math.cos(THREE.MathUtils.degToRad(this.rig.tilt)));
     const attributions = [...this.tiles.attributions, ...this.rain.attributions];
     if (attributions.join("|") !== this.lastAttribution) {
       this.lastAttribution = attributions.join("|");
@@ -605,6 +739,7 @@ export class Engine {
     }
     this.traffic.update(sim / 1000);
     this.quakes.update(sim, this.clockSeconds, this.rig.pose.dist);
+    this.storms.update(sim, this.clockSeconds, this.rig.pose.dist);
     this.fires.update(sim, this.clockSeconds);
     this.aurora.update(this.clockSeconds);
     this.updateReticle(sim);
@@ -772,7 +907,7 @@ export class Engine {
     const k = 1 - Math.exp(-dt * 5);
     for (const key of Object.keys(this.opacity) as LayerKey[]) {
       const o = this.opacity[key];
-      const dataLayer = key === "satellites" || key === "planes" || key === "ships" || key === "quakes" || key === "fires" || key === "aurora" || key === "rain";
+      const dataLayer = key === "satellites" || key === "planes" || key === "ships" || key === "quakes" || key === "fires" || key === "aurora" || key === "rain" || key === "wind" || key === "storms";
       const focusScale = this.focus && dataLayer && this.focus !== key ? 0.18 : 1;
       o.value += (o.target * focusScale - o.value) * k;
     }
@@ -782,8 +917,10 @@ export class Engine {
     const surfaceFade = 1 - THREE.MathUtils.smoothstep(dist, 40, 170);
     this.satellites.setOpacity(this.opacity.satellites.value * farFade);
     // Constellation figures belong to the open sky: they come in as the globe shrinks.
-    this.celestial.setOpacity(1, this.opacity.constellations.value * THREE.MathUtils.smoothstep(this.rig.pose.dist, 5, 14));
+    // Beside the bright planet the Milky Way stays a quiet backdrop; out in the solar system it comes up.
+    this.celestial.setOpacity(1, this.opacity.constellations.value * THREE.MathUtils.smoothstep(this.rig.pose.dist, 5, 14), 0.3 + 0.4 * THREE.MathUtils.smoothstep(this.rig.pose.dist, 3, 40));
     this.quakes.setOpacity(this.opacity.quakes.value * surfaceFade);
+    this.storms.setOpacity(this.opacity.storms.value * surfaceFade);
     this.fires.setOpacity(this.opacity.fires.value * surfaceFade);
     this.traffic.planes.setOpacity(this.opacity.planes.value * surfaceFade);
     this.traffic.ships.setOpacity(this.opacity.ships.value * surfaceFade);
@@ -808,6 +945,10 @@ export class Engine {
       return i >= 0 ? layer.displayed(i, sim / 1000) : null;
     }
     if (sel.kind === "quake") return latLonToVec(sel.quake.lat, sel.quake.lon, 1.003);
+    if (sel.kind === "storm") {
+      const at = this.storms.positions().find((s) => s.storm.id === sel.id)?.at;
+      return at ? [at.x * 1.007, at.y * 1.007, at.z * 1.007] : null;
+    }
     if (sel.kind === "place") {
       const p = placeById(sel.id);
       return p ? latLonToVec(p.lat, p.lon, 1.003) : null;
@@ -877,6 +1018,18 @@ export class Engine {
       return Math.hypot(((v.x + 1) / 2) * w - px, ((1 - v.y) / 2) * h - py);
     };
     const surfaceVisible = (x: number, y: number, z: number) => x * (cam.x - x) + y * (cam.y - y) + z * (cam.z - z) > 0;
+
+    if (this.opacity.storms.target > 0) {
+      for (const { storm, at } of this.storms.positions()) {
+        if (!surfaceVisible(at.x, at.y, at.z)) continue;
+        // A storm's swirl is wide; anywhere near its eye counts.
+        const d = screen(at.x, at.y, at.z) - 12;
+        if (d < bestD) {
+          bestD = d;
+          best = { kind: "storm", id: storm.id };
+        }
+      }
+    }
 
     if (this.opacity.quakes.target > 0) {
       for (const q of this.quakes.quakes) {
@@ -1145,6 +1298,52 @@ export class Engine {
     }
     useOrbis.setState({ auroraKp: meta.kp ?? null });
     setFeed("aurora", { status: "ready", count: 1, updated: Date.now() });
+  }
+
+  private async loadWind() {
+    const res = await fetch("/api/wind");
+    if (!res.ok) throw new Error(`wind ${res.status}`);
+    const meta = (await res.json()) as {
+      cycle: string;
+      range: number;
+      url: string;
+    };
+    const image = await fetch(meta.url);
+    if (!image.ok) throw new Error(`wind field ${image.status}`);
+    // Decode to raw pixels: the particles need exact channel values, and the cards read the same numbers.
+    const bitmap = await createImageBitmap(await image.blob(), {
+      colorSpaceConversion: "none",
+      premultiplyAlpha: "none",
+    });
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) throw new Error("no 2d context");
+    ctx.drawImage(bitmap, 0, 0);
+    const pixels = new Uint8Array(ctx.getImageData(0, 0, bitmap.width, bitmap.height).data.buffer);
+    bitmap.close();
+    if (this.disposed) return;
+    this.wind.setField({
+      cycle: meta.cycle,
+      range: meta.range,
+      width: canvas.width,
+      height: canvas.height,
+      pixels,
+    });
+    setFeed("wind", {
+      status: "ready",
+      count: 1,
+      updated: Date.parse(meta.cycle),
+    });
+  }
+
+  private async loadStorms() {
+    const res = await fetch("/api/storms");
+    if (!res.ok) throw new Error(`storms ${res.status}`);
+    const { storms } = (await res.json()) as { storms: Storm[] };
+    if (this.disposed) return;
+    this.storms.set(storms);
+    const now = this.clock.now();
+    setFeed("storms", { status: "ready", count: storms.filter((s) => stormAt(s, now)).length, updated: Date.now() });
   }
 
   private async loadRain() {

@@ -10,6 +10,7 @@ import { useOrbis } from "@/store/orbis";
 import type { Engine } from "@/engine/Engine";
 import type { LayerKey } from "@/engine/types";
 import { ArrowUpRight, Close, Spark } from "./icons";
+import { Dock } from "./Dock";
 
 interface Exchange {
   q: string;
@@ -47,7 +48,9 @@ export function Analyst() {
   const t = useDict();
   const locale = useLocale();
   const engine = useOrbis((s) => s.engine);
-  const [open, setOpen] = useState(false);
+  const open = useOrbis((s) => s.panel === "analyst");
+  const openPanel = useOrbis((s) => s.openPanel);
+  const setOpen = (v: boolean | ((v: boolean) => boolean)) => openPanel((typeof v === "function" ? v(open) : v) ? "analyst" : null);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [log, setLog] = useState<Exchange[]>([]);
@@ -112,78 +115,80 @@ export function Analyst() {
       </button>
 
       {open && (
-        <section
-          id="analyst"
-          aria-label={t.analyst.open}
-          className="bezel pointer-events-auto fixed inset-x-4 bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] z-20 animate-[card-in_0.6s_var(--ease-orbit)] md:inset-x-auto md:left-1/2 md:w-[min(40rem,calc(100vw-42rem))] md:min-w-[26rem] md:-translate-x-1/2"
-        >
-          <div className="bezel-core flex max-h-[min(30rem,calc(100dvh-14rem))] flex-col">
-            <div className="flex items-start justify-between gap-3 px-4 pt-3.5">
-              <div>
-                <h2 className="font-display text-sm font-medium tracking-tight">{t.analyst.title}</h2>
-                <p className="mt-1 max-w-[30rem] text-[11px] leading-snug text-dim">{t.analyst.disclosure}</p>
-              </div>
-              <button type="button" onClick={() => setOpen(false)} aria-label={t.analyst.close} className="-mr-1 rounded-full p-2 text-haze hover:text-lunar">
-                <Close className="size-4" />
-              </button>
-            </div>
-
-            <div ref={scroller} className="mt-2 flex-1 space-y-3 overflow-y-auto px-4 pb-2" aria-live="polite">
-              {!log.length && !busy && (
-                <ul className="flex flex-wrap gap-1.5 py-1">
-                  {t.analyst.suggestions.map((s) => (
-                    <li key={s}>
-                      <button
-                        type="button"
-                        onClick={() => ask(s)}
-                        className="rounded-full border border-hairline px-3 py-1.5 text-left text-xs text-haze transition-colors duration-300 hover:border-foil/45 hover:text-lunar"
-                      >
-                        {s}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {log.map((x, i) => (
-                <div key={i} className="space-y-1.5">
-                  <p className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-md bg-white/[0.06] px-3 py-1.5 text-sm text-haze">{x.q}</p>
-                  <p className={`max-w-[95%] text-sm leading-relaxed ${x.error ? "text-dim" : "text-lunar"}`}>{x.a}</p>
+        <Dock>
+          <section
+            id="analyst"
+            aria-label={t.analyst.open}
+            className="dock-right bezel pointer-events-auto z-20 flex flex-col overflow-hidden animate-[card-in_0.6s_var(--ease-orbit)]"
+          >
+            <div className="bezel-core flex min-h-0 flex-1 flex-col">
+              <div className="flex items-start justify-between gap-3 px-4 pt-3.5">
+                <div>
+                  <h2 className="font-display text-sm font-medium tracking-tight">{t.analyst.title}</h2>
+                  <p className="mt-1 max-w-[30rem] text-[11px] leading-snug text-dim">{t.analyst.disclosure}</p>
                 </div>
-              ))}
-              {busy && <p className="animate-pulse text-sm text-dim">{t.analyst.thinking}</p>}
-            </div>
+                <button type="button" onClick={() => setOpen(false)} aria-label={t.analyst.close} className="-mr-1 rounded-full p-2 text-haze hover:text-lunar">
+                  <Close className="size-4" />
+                </button>
+              </div>
 
-            <form
-              className="flex items-center gap-2 border-t border-hairline p-2 pl-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                ask(input);
-              }}
-            >
-              <input
-                ref={field}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                maxLength={300}
-                placeholder={t.analyst.placeholder}
-                aria-label={t.analyst.placeholder}
-                className="h-10 min-w-0 flex-1 bg-transparent text-sm text-lunar outline-none placeholder:text-dim"
-                disabled={left === 0}
-              />
-              {left !== null && <span className="readout hidden shrink-0 text-[11px] text-dim sm:inline">{fill(t.analyst.left, { n: left })}</span>}
-              <button
-                type="submit"
-                disabled={busy || input.trim().length < 2 || left === 0}
-                className="group flex shrink-0 items-center gap-2 rounded-full bg-foil py-1.5 pr-1.5 pl-4 text-xs font-medium text-black transition-opacity duration-300 disabled:opacity-40"
+              <div ref={scroller} className="mt-2 flex-1 space-y-3 overflow-y-auto px-4 pb-2" aria-live="polite">
+                {!log.length && !busy && (
+                  <ul className="flex flex-wrap gap-1.5 py-1">
+                    {t.analyst.suggestions.map((s) => (
+                      <li key={s}>
+                        <button
+                          type="button"
+                          onClick={() => ask(s)}
+                          className="rounded-full border border-hairline px-3 py-1.5 text-left text-xs text-haze transition-colors duration-300 hover:border-foil/45 hover:text-lunar"
+                        >
+                          {s}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {log.map((x, i) => (
+                  <div key={i} className="space-y-1.5">
+                    <p className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-md bg-white/[0.06] px-3 py-1.5 text-sm text-haze">{x.q}</p>
+                    <p className={`max-w-[95%] text-sm leading-relaxed ${x.error ? "text-dim" : "text-lunar"}`}>{x.a}</p>
+                  </div>
+                ))}
+                {busy && <p className="animate-pulse text-sm text-dim">{t.analyst.thinking}</p>}
+              </div>
+
+              <form
+                className="flex items-center gap-2 border-t border-hairline p-2 pl-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  ask(input);
+                }}
               >
-                {t.analyst.send}
-                <span className="flex size-6 items-center justify-center rounded-full bg-black/10 transition-transform duration-500 ease-[var(--ease-orbit)] group-hover:translate-x-0.5 group-hover:-translate-y-px">
-                  <ArrowUpRight className="size-3.5" />
-                </span>
-              </button>
-            </form>
-          </div>
-        </section>
+                <input
+                  ref={field}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  maxLength={300}
+                  placeholder={t.analyst.placeholder}
+                  aria-label={t.analyst.placeholder}
+                  className="h-10 min-w-0 flex-1 bg-transparent text-sm text-lunar outline-none placeholder:text-dim"
+                  disabled={left === 0}
+                />
+                {left !== null && <span className="readout hidden shrink-0 text-[11px] text-dim sm:inline">{fill(t.analyst.left, { n: left })}</span>}
+                <button
+                  type="submit"
+                  disabled={busy || input.trim().length < 2 || left === 0}
+                  className="group flex shrink-0 items-center gap-2 rounded-full bg-foil py-1.5 pr-1.5 pl-4 text-xs font-medium text-black transition-opacity duration-300 disabled:opacity-40"
+                >
+                  {t.analyst.send}
+                  <span className="flex size-6 items-center justify-center rounded-full bg-black/10 transition-transform duration-500 ease-[var(--ease-orbit)] group-hover:translate-x-0.5 group-hover:-translate-y-px">
+                    <ArrowUpRight className="size-3.5" />
+                  </span>
+                </button>
+              </form>
+            </div>
+          </section>
+        </Dock>
       )}
     </>
   );

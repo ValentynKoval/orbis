@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { latLonToVec, vecToLatLon } from "@/lib/geo";
 import { providerFor, tileAt, tileBounds, tileKey, type ImageryProvider } from "@/lib/tiles";
-import { sampleGrid, TERRAIN_MAX_LEVEL, TERRAIN_MIN_LEVEL, terrainTileFor, tileUv } from "@/lib/terrain";
+import { sampleGrid, TERRAIN_MAX_LEVEL, TERRAIN_MIN_LEVEL, TERRAIN_VERSION, terrainTileFor, tileUv } from "@/lib/terrain";
 import { earthFragment, logDepth } from "../shaders";
 
 const SEGMENTS = 12;
@@ -9,8 +9,8 @@ const TILE_PX = 256;
 /** Subdivide when a tile would cover more than this many screen pixels. */
 const SPLIT_PX = TILE_PX * 1.15;
 const FADE_MS = 350;
-/** A request nobody has asked for in this long is cancelled (the camera moved on). */
-const STALE_REQUEST_MS = 1200;
+/** A request nobody has asked for in this long is cancelled (the camera moved on for good; shorter waits re-requested the same tiles during a dive). */
+const STALE_REQUEST_MS = 3000;
 /** Tiles are used only when the camera is closer than this (Earth radii from the centre). */
 export const TILES_FROM_DIST = 3.4;
 const TILES_FULL_DIST = 2.6;
@@ -63,9 +63,13 @@ export const tilesVertex = /* glsl */ `
 
 /** The planet shader with the day albedo read from the tile and the rest from the global maps. */
 export const tilesFragment = earthFragment
-  .replace("varying vec2 vUv;", "varying vec2 vUv;\n  varying vec2 vTileUv;\n  uniform float uFade;")
-  // Sentinel-2 mosaics are muted; lift them toward the Blue Marble look.
-  .replace("texture2D(uDay, vUv).rgb", "pow(texture2D(uDay, vTileUv).rgb, vec3(0.78)) * 1.5")
+  .replace("varying vec2 vUv;", "varying vec2 vUv;\n  varying vec2 vTileUv;\n  uniform float uFade;\n  uniform sampler2D uBase;\n  uniform float uOpenSea;")
+  // Sentinel-2 mosaics are muted; lift them toward the Blue Marble look. Their open ocean is a dark mosaic with
+  // swath seams, so out at sea, until coastal zoom levels, the planet's own Blue Marble ocean shows instead.
+  .replace(
+    "vec3 albedo = texture2D(uDay, vUv).rgb;\n    float water = texture2D(uWater, vUv).r;",
+    "float water = texture2D(uWater, vUv).r;\n    vec3 albedo = mix(pow(texture2D(uDay, vTileUv).rgb, vec3(0.78)) * 1.5, texture2D(uBase, vUv).rgb, smoothstep(0.85, 1.0, water) * uOpenSea);",
+  )
   .replace("gl_FragColor = vec4(lit + night + atmosphere, 1.0);", "gl_FragColor = vec4(lit + night + atmosphere, uFade);");
 
 /** Overlays (weather radar): the tile's own colours and alpha, nothing else. */
@@ -145,6 +149,10 @@ export class Tiles {
   private readonly lift: number;
   private readonly overlay: boolean;
   private readonly maxInFlight: number;
+  /** New textures shown per frame: spreads GPU uploads so a burst of arrivals never stalls a frame. */
+  private readonly revealPerFrame: number;
+  private arrived: { node: Node; texture: THREE.Texture }[] = [];
+  private diving = false;
   private readonly maxTextures: number;
   private grids = new Map<string, Int16Array | "loading" | "failed">();
   private v = new THREE.Vector3();
@@ -160,12 +168,20 @@ export class Tiles {
     this.terrain = !!options.terrain;
     this.lift = options.lift ?? 0;
     this.overlay = !!options.overlay;
-    this.maxInFlight = options.lite ? 10 : 18;
+    // Every tile host speaks HTTP/2, so requests share one connection: many can be in flight at once.
+    this.maxInFlight = options.lite ? 14 : 28;
+    this.revealPerFrame = options.lite ? 4 : 8;
     this.maxTextures = options.lite ? 220 : 420;
     const own = { uDay: { value: null }, uFade: { value: 1 }, uSink: { value: 0 } };
     this.material = options.overlay
       ? new THREE.ShaderMaterial({ ...logDepth(tilesVertex, overlayFragment), uniforms: own, transparent: true, depthWrite: false })
-      : new THREE.ShaderMaterial({ ...logDepth(tilesVertex, tilesFragment), uniforms: { ...sharedUniforms, ...own }, transparent: true, depthWrite: true });
+      : new THREE.ShaderMaterial({
+          ...logDepth(tilesVertex, tilesFragment),
+          // The planet's day map stays reachable as uBase: the same uniform object, so it follows texture swaps.
+          uniforms: { ...sharedUniforms, ...own, uBase: sharedUniforms.uDay, uOpenSea: { value: 0 } },
+          transparent: true,
+          depthWrite: true,
+        });
   }
 
   get maxLevel() {
@@ -179,8 +195,10 @@ export class Tiles {
   }
 
   /** Call every frame; `dist` is the camera distance from the Earth's centre. */
-  update(camera: THREE.PerspectiveCamera, viewportHeight: number, dist: number) {
+  update(camera: THREE.PerspectiveCamera, viewportHeight: number, dist: number, goalDist = dist) {
     const now = performance.now();
+    // Diving fast toward a much closer goal: the levels passed on the way are obsolete in a moment.
+    this.diving = goalDist < dist * 0.6;
     this.camera = camera;
     this.layerFade = THREE.MathUtils.clamp((TILES_FROM_DIST - dist) / (TILES_FROM_DIST - TILES_FULL_DIST), 0, 1) * this.opacity;
     for (const n of this.drawn) if (n.mesh) n.mesh.visible = false;
@@ -196,6 +214,7 @@ export class Tiles {
       return;
     }
     this.group.visible = true;
+    this.reveal(now);
     this.projView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.projView);
     this.pxPerRadian = viewportHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
@@ -222,8 +241,9 @@ export class Tiles {
     const until = performance.now() + 6000;
     this.prefetched = [];
     for (const [z, r] of [
+      [Math.max(minLevel, target - 3), 0],
       [target, 1],
-      [Math.max(minLevel, target - 2), 0],
+      [Math.max(minLevel, target - 1), 0],
     ] as const) {
       if (!providerFor(this.providers, z)) continue;
       const { x, y } = tileAt(z, lat, lon);
@@ -234,7 +254,8 @@ export class Tiles {
           if (ty < 0 || ty >= n) continue;
           const node = this.node(z, (((x + dx) % n) + n) % n, ty);
           node.lastWanted = node.lastUsed = until;
-          node.priority = 1e6 - z;
+          // The coarse preview first, then the target level, then the one between.
+          node.priority = z === Math.max(minLevel, target - 3) ? 2e6 : 1e6 - z;
           this.prefetched.push(node);
           if (this.terrain) this.ensureTerrain(node);
         }
@@ -330,8 +351,11 @@ export class Tiles {
     node.lastUsed = now;
     const b = tileBounds(z, x, y);
     const widthRad = ((2 * Math.PI) / 2 ** z) * Math.cos(THREE.MathUtils.degToRad((b.north + b.south) / 2));
-    const d = Math.max(1e-5, cam.distanceTo(this.nearest(node, cam)));
-    const px = (widthRad / d) * this.pxPerRadian;
+    const near = this.nearest(node, cam);
+    const d = Math.max(1e-5, cam.distanceTo(near));
+    // Seen at a grazing angle a tile is foreshortened, so it needs less detail than its width suggests.
+    const facing = THREE.MathUtils.clamp(this.v.copy(cam).sub(near).normalize().dot(near.normalize()), 0.12, 1);
+    const px = ((widthRad / d) * this.pxPerRadian) * Math.sqrt(facing);
     const fade = node.texture ? Math.min(1, (now - node.loadedAt) / FADE_MS) : 0;
     const split = z < this.maxLevel && px > SPLIT_PX && !!providerFor(this.providers, z + 1);
     if (!split) {
@@ -372,10 +396,13 @@ export class Tiles {
     const material = this.material;
     const texture = node.texture;
     const alpha = fade * this.layerFade;
+    // Open sea keeps the Blue Marble ocean up to level 7 and hands over to the imagery by level 9.
+    const openSea = 1 - THREE.MathUtils.smoothstep(node.z, 7, 9);
     mesh.onBeforeRender = () => {
       material.uniforms.uDay.value = texture;
       material.uniforms.uFade.value = alpha;
       material.uniforms.uSink.value = sink;
+      if (material.uniforms.uOpenSea) material.uniforms.uOpenSea.value = openSea;
       // One material serves every tile: force the renderer to upload the changed uniforms.
       material.uniformsNeedUpdate = true;
     };
@@ -450,7 +477,8 @@ export class Tiles {
     geometry.boundingSphere = new THREE.Sphere(node.center.clone(), node.radius);
     const mesh = new THREE.Mesh(geometry, this.material);
     mesh.frustumCulled = false;
-    mesh.renderOrder = node.z;
+    // Between the base globe (0) and the clouds (1): imagery first, overlays above it, deeper levels last.
+    mesh.renderOrder = (this.overlay ? 0.9 : 0.1) + node.z * 0.001;
     this.group.add(mesh);
     return mesh;
   }
@@ -460,7 +488,7 @@ export class Tiles {
     const key = node.terrainKey;
     if (!key || this.grids.has(key)) return;
     this.grids.set(key, "loading");
-    fetch(`/api/terrain/${key}`)
+    fetch(`/api/terrain/${key}?v=${TERRAIN_VERSION}`)
       .then((res) => {
         if (!res.ok) throw new Error(`terrain ${res.status}`);
         return res.arrayBuffer();
@@ -495,6 +523,19 @@ export class Tiles {
     node.raised = true;
   }
 
+  private reveal(now: number) {
+    if (!this.arrived.length) return;
+    this.arrived.sort((a, b) => b.node.priority - a.node.priority);
+    for (const { node, texture } of this.arrived.splice(0, this.revealPerFrame)) {
+      if (!this.nodes.has(node.key)) {
+        texture.dispose();
+        continue;
+      }
+      node.texture = texture;
+      node.loadedAt = now;
+    }
+  }
+
   /** Cancels requests for tiles the view no longer needs. */
   private cancelStale(now: number) {
     for (const node of this.inFlight) {
@@ -511,8 +552,15 @@ export class Tiles {
     for (const n of this.prefetched) if (!n.texture && !n.loading && now < n.lastWanted) queue.push(n);
     if (!queue.length) return;
     queue.sort((a, b) => b.priority - a.priority);
+    // While diving, most slots go to the destination (prefetched) tiles; passing levels get a third.
+    const passing = this.diving ? Math.floor(this.maxInFlight / 3) : this.maxInFlight;
+    let busy = 0;
+    for (const n of this.inFlight) if (!this.prefetched.includes(n)) busy++;
     for (const node of queue) {
       if (this.inFlight.size >= this.maxInFlight) break;
+      const destination = this.prefetched.includes(node);
+      if (!destination && busy >= passing) continue;
+      if (!destination) busy++;
       if (node.loading || node.texture) continue;
       const provider = providerFor(this.providers, node.z);
       if (!provider) continue;
@@ -541,8 +589,7 @@ export class Tiles {
         texture.anisotropy = this.anisotropy;
         texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
         texture.needsUpdate = true;
-        node.texture = texture;
-        node.loadedAt = performance.now();
+        this.arrived.push({ node, texture });
       })
       .catch(() => {
         if (node.loading === ctrl && !ctrl.signal.aborted) node.failedAt = performance.now();

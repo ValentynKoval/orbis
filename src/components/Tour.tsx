@@ -9,7 +9,7 @@ import { useOrbis } from "@/store/orbis";
 import type { Engine } from "@/engine/Engine";
 import { Close } from "./icons";
 
-type StepId = "intro" | "iss" | "planes" | "ships" | "quake" | "fires" | "night" | "aurora" | "moon" | "saturn" | "craft" | "overview" | "home";
+type StepId = "intro" | "iss" | "planes" | "ships" | "quake" | "storm" | "fires" | "night" | "aurora" | "moon" | "saturn" | "craft" | "overview" | "home";
 
 interface Step {
   id: StepId;
@@ -38,13 +38,14 @@ const STEPS: Step[] = [
   },
   {
     id: "iss",
-    hold: 9,
+    hold: 12,
     run: (e) => {
       const i = e.issIndex;
       if (i < 0) return false;
       e.rig.setAutoRotate(0);
       e.setFocus("satellites");
-      void e.focusResult("satellite", i);
+      // Find it, then ride along with it for the rest of the step.
+      void e.focusResult("satellite", i).then(() => e.follow(useOrbis.getState().selection));
       return true;
     },
   },
@@ -83,6 +84,18 @@ const STEPS: Step[] = [
       e.setFocus("quakes");
       s.select({ kind: "quake", quake: q });
       e.rig.flyTo({ lat: q.lat, lon: q.lon, dist: 2.1 }, 2.8);
+      return true;
+    },
+  },
+  {
+    id: "storm",
+    hold: 9,
+    run: (e) => {
+      const storm = e.strongestStorm;
+      if (!storm) return false;
+      e.setFocus("storms");
+      useOrbis.getState().select({ kind: "storm", id: storm.id });
+      e.rig.flyTo({ lat: storm.lat, lon: storm.lon, dist: 2.2 }, 2.8);
       return true;
     },
   },
@@ -228,7 +241,7 @@ export function Tour() {
     <section
       aria-label={t.tour.open}
       aria-live="polite"
-      className="bezel pointer-events-auto absolute top-[calc(max(1rem,env(safe-area-inset-top))+4.25rem)] left-1/2 w-[min(32rem,calc(100vw-2rem))] -translate-x-1/2 animate-[card-in_0.7s_var(--ease-orbit)]"
+      className="bezel pointer-events-auto absolute inset-x-4 top-[var(--dock-top)] animate-[card-in_0.7s_var(--ease-orbit)] md:inset-x-auto md:top-auto md:bottom-[var(--dock-bottom)] md:left-4 md:w-[min(26rem,calc(100vw-2rem))]"
     >
       <div className="bezel-core px-5 py-4">
         <div className="flex items-start justify-between gap-3">

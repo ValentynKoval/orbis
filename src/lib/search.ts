@@ -1,6 +1,6 @@
 /** Ranking for the search palette: exact beats prefix beats word prefix beats substring. */
 
-export type SearchKind = "satellite" | "plane" | "ship" | "quake" | "place";
+export type SearchKind = "satellite" | "plane" | "ship" | "quake" | "place" | "storm";
 
 export interface SearchCandidate {
   kind: SearchKind;
@@ -44,7 +44,7 @@ export function search(query: string, candidates: Iterable<SearchCandidate>, per
     for (const t of c.terms) best = Math.max(best, scoreTerm(t, q));
     if (!best) continue;
     // Satellites and landmarks are what people look for by name; a callsign or registration that happens to match ranks after them.
-    best += c.kind === "satellite" ? 6 : c.kind === "place" ? 5 : 0;
+    best += c.kind === "satellite" || c.kind === "storm" ? 6 : c.kind === "place" ? 5 : 0;
     let list = byKind.get(c.kind);
     if (!list) byKind.set(c.kind, (list = []));
     list.push({ ...c, score: best });

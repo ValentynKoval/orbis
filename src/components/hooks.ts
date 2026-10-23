@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocale } from "@/i18n/client";
 import { formatTime, zoneLabel } from "@/lib/format";
 import { useOrbis } from "@/store/orbis";
@@ -13,6 +13,23 @@ export function useNow(ms = 1000): number {
     return () => window.clearInterval(id);
   }, [ms]);
   return now;
+}
+
+/**
+ * Publishes an element's height as a CSS variable on the page while `active`, so the docks above it keep
+ * clear however its content wraps (the time controls take two rows on phones).
+ */
+export function useReserve<T extends HTMLElement>(name: string, active: boolean) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!active || !el) return;
+    const root = document.documentElement;
+    const observer = new ResizeObserver(() => root.style.setProperty(name, `${el.offsetHeight}px`));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [name, active]);
+  return ref;
 }
 
 /** Picks up the browser's time zone once mounted (the server renders UTC). */

@@ -86,7 +86,7 @@ const milkyFragment = /* glsl */ `
     vec2 uv = vec2(fract(0.5 - ra / (2.0 * PI)), 0.5 + dec / PI);
     vec3 c = texture2D(uMap, uv).rgb;
     // Drop the haze floor so the sky between the arms stays black.
-    c = max(c - vec3(0.07), 0.0) * 1.35;
+    c = max(c - vec3(0.09), 0.0) * 1.4;
     gl_FragColor = vec4(c * uIntensity, 1.0);
     #include <colorspace_fragment>
   }
@@ -199,9 +199,9 @@ export class Celestial {
   }
 
   /** Stars always; figures and names by the layer switch, scaled by how much sky is in view. */
-  setOpacity(stars: number, figures: number) {
+  setOpacity(stars: number, figures: number, milkyWay = 0.8) {
     this.starMaterial.uniforms.uOpacity.value = stars;
-    this.milkyMaterial.uniforms.uIntensity.value = 0.8 * stars;
+    this.milkyMaterial.uniforms.uIntensity.value = milkyWay * stars;
     this.figureMaterial.opacity = 0.2 * figures;
     this.figures.visible = figures > 0.01;
     if (Math.abs(figures - this.labelOpacity) > 0.005) {

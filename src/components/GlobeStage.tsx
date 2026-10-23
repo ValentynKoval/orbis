@@ -34,7 +34,8 @@ export function GlobeStage() {
       const mode = useOrbis.getState().mode;
       engine.setInteractive(mode === "live");
       useOrbis.getState().setEngine(engine);
-      if (process.env.NODE_ENV !== "production") Object.assign(window, { __orbisEngine: engine, __orbisStore: useOrbis });
+      // Dev builds, or ?debug=1 in production, expose the engine for measurements (scripts/zoombench.mjs).
+      if (process.env.NODE_ENV !== "production" || new URLSearchParams(location.search).has("debug")) Object.assign(window, { __orbisEngine: engine, __orbisStore: useOrbis });
       engine.start().catch(() => useOrbis.setState({ webglError: true }));
       // Map tiles survive between visits (public/sw.js); dev skips it so hot reload stays honest.
       if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);

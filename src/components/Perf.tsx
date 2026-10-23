@@ -27,7 +27,8 @@ export function Perf() {
 
   if (!on || !stats) return null;
   return (
-    <div className="readout pointer-events-none absolute top-[max(1rem,env(safe-area-inset-top))] left-1/2 mt-14 -translate-x-1/2 rounded-full border border-hairline bg-black/60 px-3 py-1 text-[11px] text-haze">
+    // Between the header and the buttons on wide screens; there is no free spot for it on small ones.
+    <div className="readout pointer-events-none absolute top-[calc(var(--safe-t)+0.9rem)] left-1/2 hidden -translate-x-1/2 rounded-full border border-hairline bg-black/60 px-3 py-1 text-[11px] text-haze lg:block">
       {stats.fps} fps · {stats.calls} draws · {Math.round(stats.triangles / 1000)}k tris · {stats.tiles} tiles · ×{stats.pixelRatio.toFixed(2)}
     </div>
   );

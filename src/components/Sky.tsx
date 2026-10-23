@@ -8,6 +8,7 @@ import { compass, type Pass } from "@/lib/passes";
 import { useOrbis } from "@/store/orbis";
 import type { Overhead } from "@/engine/Engine";
 import { Close, Compass, Target } from "./icons";
+import { Dock } from "./Dock";
 import { useClockFormat, useNow } from "./hooks";
 import { EclipsesAhead, SkyTonight } from "./SkyExtras";
 
@@ -38,7 +39,9 @@ export function Sky() {
   const engine = useOrbis((s) => s.engine);
   const observer = useOrbis((s) => s.observer);
   const setObserver = useOrbis((s) => s.setObserver);
-  const [open, setOpen] = useState(false);
+  const open = useOrbis((s) => s.panel === "sky");
+  const openPanel = useOrbis((s) => s.openPanel);
+  const setOpen = (v: boolean | ((v: boolean) => boolean)) => openPanel((typeof v === "function" ? v(open) : v) ? "sky" : null);
   const [locating, setLocating] = useState(false);
   const [denied, setDenied] = useState(false);
   const [passes, setPasses] = useState<{ place: string; list: Pass[] } | null>(null);
@@ -114,115 +117,117 @@ export function Sky() {
       </button>
 
       {open && (
-        <section
-          id="sky"
-          aria-label={t.sky.title}
-          className="bezel pointer-events-auto fixed inset-x-4 bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] z-20 animate-[card-in_0.6s_var(--ease-orbit)] md:inset-x-auto md:top-24 md:right-4 md:bottom-auto md:w-[24rem]"
-        >
-          <div className="bezel-core flex max-h-[min(34rem,calc(100dvh-14rem))] flex-col overflow-y-auto p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="font-display text-sm font-medium tracking-tight">{t.sky.title}</h2>
-                <p className="mt-1 text-[11px] leading-snug text-dim">{t.sky.lead}</p>
-              </div>
-              <button type="button" onClick={() => setOpen(false)} aria-label={t.sky.close} className="-mt-1 -mr-2 rounded-full p-2 text-haze hover:text-lunar">
-                <Close className="size-4" />
-              </button>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={locate}
-                disabled={locating}
-                className="inline-flex items-center gap-2 rounded-full bg-foil px-3.5 py-2 text-xs font-medium text-black disabled:opacity-50"
-              >
-                <Target className="size-3.5" />
-                {locating ? t.sky.locating : t.sky.useMyLocation}
-              </button>
-              <button type="button" onClick={useView} className="rounded-full border border-hairline px-3.5 py-2 text-xs text-lunar hover:border-foil/50">
-                {t.sky.useViewCentre}
-              </button>
-            </div>
-            {denied && <p className="mt-2 text-[11px] text-seismic">{t.sky.denied}</p>}
-            {observer && (
-              <p className="readout mt-3 text-xs text-haze">
-                {formatLatLon(observer.lat, observer.lon)}
-                <button type="button" onClick={() => engine?.flyTo(observer.lat, observer.lon, 1.6)} className="ml-2 text-foil underline decoration-foil/40 underline-offset-4">
-                  {t.sky.lookHere}
+        <Dock>
+          <section
+            id="sky"
+            aria-label={t.sky.title}
+            className="dock-right bezel pointer-events-auto z-20 animate-[card-in_0.6s_var(--ease-orbit)]"
+          >
+            <div className="bezel-core flex flex-col p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-sm font-medium tracking-tight">{t.sky.title}</h2>
+                  <p className="mt-1 text-[11px] leading-snug text-dim">{t.sky.lead}</p>
+                </div>
+                <button type="button" onClick={() => setOpen(false)} aria-label={t.sky.close} className="-mt-1 -mr-2 rounded-full p-2 text-haze hover:text-lunar">
+                  <Close className="size-4" />
                 </button>
-              </p>
-            )}
+              </div>
 
-            {observer && (
-              <>
-                {weather && (
-                  <p className="readout mt-3 text-sm text-lunar">
-                    {formatNumber(weather.temperature, locale)}°C, {t.sky.weather[weather.code] ?? t.sky.weather.unknown},{" "}
-                    {fill(t.sky.wind, { speed: formatNumber(weather.wind, locale), dir: compass(weather.windDir) })}, {fill(t.sky.cloudCover, { pct: String(weather.clouds) })}
-                  </p>
-                )}
-                <h3 className="mt-5 text-xs text-haze">{t.sky.issPasses}</h3>
-                {!currentPasses && <p className="mt-2 text-sm text-dim">{t.sky.computing}</p>}
-                {currentPasses && !upcoming.length && <p className="mt-2 text-sm text-dim">{t.sky.noPasses}</p>}
-                <ul className="mt-2 divide-y divide-hairline">
-                  {upcoming.slice(0, 8).map((p) => (
-                    <li key={p.start} className="flex items-center justify-between gap-3 py-2 text-xs">
-                      <div className="min-w-0">
-                        <p className="readout text-lunar">{`${clock.time(p.max)} ${clock.label(p.max)}`}</p>
-                        <p className="text-dim">
-                          {fill(t.sky.passLine, {
-                            el: String(p.maxElevation),
-                            from: compass(p.startAzimuth),
-                            to: compass(p.endAzimuth),
-                            min: String(Math.round((p.end - p.start) / 60_000)),
-                          })}
-                        </p>
-                      </div>
-                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] ${p.visible ? "border-foil/50 text-foil" : "border-hairline text-dim"}`}>
-                        {p.visible ? t.sky.visible : t.sky.daylight}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={locate}
+                  disabled={locating}
+                  className="inline-flex items-center gap-2 rounded-full bg-foil px-3.5 py-2 text-xs font-medium text-black disabled:opacity-50"
+                >
+                  <Target className="size-3.5" />
+                  {locating ? t.sky.locating : t.sky.useMyLocation}
+                </button>
+                <button type="button" onClick={useView} className="rounded-full border border-hairline px-3.5 py-2 text-xs text-lunar hover:border-foil/50">
+                  {t.sky.useViewCentre}
+                </button>
+              </div>
+              {denied && <p className="mt-2 text-[11px] text-seismic">{t.sky.denied}</p>}
+              {observer && (
+                <p className="readout mt-3 text-xs text-haze">
+                  {formatLatLon(observer.lat, observer.lon)}
+                  <button type="button" onClick={() => engine?.flyTo(observer.lat, observer.lon, 1.6)} className="ml-2 text-foil underline decoration-foil/40 underline-offset-4">
+                    {t.sky.lookHere}
+                  </button>
+                </p>
+              )}
 
-                <h3 className="mt-5 text-xs text-haze">{t.sky.overhead}</h3>
-                {overhead && !overhead.planes.length && !overhead.satellites.length && <p className="mt-2 text-sm text-dim">{t.sky.nothingOverhead}</p>}
-                {overhead && overhead.planes.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {overhead.planes.slice(0, 6).map((p) => (
-                      <li key={p.id} className="flex items-baseline justify-between gap-3 text-xs">
-                        <button type="button" onClick={() => useOrbis.getState().select({ kind: "plane", id: p.id })} className="truncate text-lunar hover:text-foil">
-                          {p.callsign || p.reg || p.id.toUpperCase()} {p.type && <span className="text-dim">{p.type}</span>}
-                        </button>
-                        <span className="readout shrink-0 text-dim">
-                          {formatNumber(p.altM, locale)} {t.units.m}, {formatNumber(p.distanceKm, locale)} {t.units.km}
+              {observer && (
+                <>
+                  {weather && (
+                    <p className="readout mt-3 text-sm text-lunar">
+                      {formatNumber(weather.temperature, locale)}°C, {t.sky.weather[weather.code] ?? t.sky.weather.unknown},{" "}
+                      {fill(t.sky.wind, { speed: formatNumber(weather.wind, locale), dir: compass(weather.windDir) })}, {fill(t.sky.cloudCover, { pct: String(weather.clouds) })}
+                    </p>
+                  )}
+                  <h3 className="mt-5 text-xs text-haze">{t.sky.issPasses}</h3>
+                  {!currentPasses && <p className="mt-2 text-sm text-dim">{t.sky.computing}</p>}
+                  {currentPasses && !upcoming.length && <p className="mt-2 text-sm text-dim">{t.sky.noPasses}</p>}
+                  <ul className="mt-2 divide-y divide-hairline">
+                    {upcoming.slice(0, 8).map((p) => (
+                      <li key={p.start} className="flex items-center justify-between gap-3 py-2 text-xs">
+                        <div className="min-w-0">
+                          <p className="readout text-lunar">{`${clock.time(p.max)} ${clock.label(p.max)}`}</p>
+                          <p className="text-dim">
+                            {fill(t.sky.passLine, {
+                              el: String(p.maxElevation),
+                              from: compass(p.startAzimuth),
+                              to: compass(p.endAzimuth),
+                              min: String(Math.round((p.end - p.start) / 60_000)),
+                            })}
+                          </p>
+                        </div>
+                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] ${p.visible ? "border-foil/50 text-foil" : "border-hairline text-dim"}`}>
+                          {p.visible ? t.sky.visible : t.sky.daylight}
                         </span>
                       </li>
                     ))}
                   </ul>
-                )}
-                {overhead && overhead.satellites.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {overhead.satellites.slice(0, 6).map((s) => (
-                      <li key={s.index} className="flex items-baseline justify-between gap-3 text-xs">
-                        <button type="button" onClick={() => engine?.focusResult("satellite", s.index)} className="truncate text-lunar hover:text-foil">
-                          {s.name}
-                        </button>
-                        <span className="readout shrink-0 text-dim">
-                          {s.elevation}° · {formatNumber(s.altKm, locale)} {t.units.km}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {overhead && <p className="mt-2 text-[10px] text-dim">{formatAgo(overhead.at, now, locale)}</p>}
-                <SkyTonight lat={observer.lat} lon={observer.lon} now={now} />
-              </>
-            )}
-            <EclipsesAhead now={now} />
-          </div>
-        </section>
+
+                  <h3 className="mt-5 text-xs text-haze">{t.sky.overhead}</h3>
+                  {overhead && !overhead.planes.length && !overhead.satellites.length && <p className="mt-2 text-sm text-dim">{t.sky.nothingOverhead}</p>}
+                  {overhead && overhead.planes.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {overhead.planes.slice(0, 6).map((p) => (
+                        <li key={p.id} className="flex items-baseline justify-between gap-3 text-xs">
+                          <button type="button" onClick={() => useOrbis.getState().select({ kind: "plane", id: p.id })} className="truncate text-lunar hover:text-foil">
+                            {p.callsign || p.reg || p.id.toUpperCase()} {p.type && <span className="text-dim">{p.type}</span>}
+                          </button>
+                          <span className="readout shrink-0 text-dim">
+                            {formatNumber(p.altM, locale)} {t.units.m}, {formatNumber(p.distanceKm, locale)} {t.units.km}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {overhead && overhead.satellites.length > 0 && (
+                    <ul className="mt-2 space-y-1">
+                      {overhead.satellites.slice(0, 6).map((s) => (
+                        <li key={s.index} className="flex items-baseline justify-between gap-3 text-xs">
+                          <button type="button" onClick={() => engine?.focusResult("satellite", s.index)} className="truncate text-lunar hover:text-foil">
+                            {s.name}
+                          </button>
+                          <span className="readout shrink-0 text-dim">
+                            {s.elevation}° · {formatNumber(s.altKm, locale)} {t.units.km}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {overhead && <p className="mt-2 text-[10px] text-dim">{formatAgo(overhead.at, now, locale)}</p>}
+                  <SkyTonight lat={observer.lat} lon={observer.lon} now={now} />
+                </>
+              )}
+              <EclipsesAhead now={now} />
+            </div>
+          </section>
+        </Dock>
       )}
     </>
   );

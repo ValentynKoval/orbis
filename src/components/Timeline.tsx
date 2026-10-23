@@ -4,7 +4,7 @@ import { useRef } from "react";
 import { useDict } from "@/i18n/client";
 import { fill } from "@/i18n/config";
 import { useOrbis } from "@/store/orbis";
-import { useNow, useClockFormat } from "./hooks";
+import { useNow, useClockFormat, useReserve } from "./hooks";
 
 const SPAN_MS = 24 * 3600_000;
 const RATES = [1, 60, 600] as const;
@@ -20,6 +20,7 @@ function offsetLabel(ms: number, t: ReturnType<typeof useDict>) {
 
 /** The last 24 hours as a scrubber: drag to any moment, play it back, or return to live. */
 export function Timeline() {
+  const reserve = useReserve<HTMLElement>("--timeline-h", useOrbis((s) => s.space) === "earth");
   const clock = useClockFormat();
   const t = useDict();
   const engine = useOrbis((s) => s.engine);
@@ -57,8 +58,9 @@ export function Timeline() {
 
   return (
     <section
+      ref={reserve}
       aria-label={t.timeline.label}
-      className="bezel pointer-events-auto absolute inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] md:inset-x-auto md:left-1/2 md:w-[min(40rem,calc(100vw-42rem))] md:min-w-[26rem] md:-translate-x-1/2"
+      className="bezel pointer-events-auto absolute inset-x-4 bottom-[var(--safe-b)] md:inset-x-auto md:left-1/2 md:w-[min(38rem,calc(100vw-2rem))] md:-translate-x-1/2"
     >
       <div className="bezel-core flex flex-col gap-2 px-3 pt-2.5 pb-2">
         <div className="flex items-center gap-2">

@@ -9,7 +9,8 @@ import {
   logDepth,
 } from "../shaders";
 
-const ATMOSPHERE_OUTER = 1.065;
+/** Top of the atmosphere: 100 km, where the scattering has faded to nothing. */
+const ATMOSPHERE_OUTER = 1 + 100 / 6371;
 
 /** The Earth itself: surface, clouds, atmosphere halo, borders, and the star field around it. */
 export class Planet {
@@ -24,15 +25,20 @@ export class Planet {
   private atmosphereMaterial: THREE.ShaderMaterial;
   private blank: THREE.DataTexture;
 
-  constructor(segments: number) {
+  constructor(segments: number, lite = false) {
     this.blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
     this.blank.needsUpdate = true;
     const sun = new THREE.Vector3(1, 0, 0);
     // Far away until the Moon layer reports in, so no eclipse is drawn by accident.
 
     const sphere = new THREE.SphereGeometry(1, segments, segments / 2);
+    const earthShaders = logDepth(earthVertex, earthFragment);
     this.earthMaterial = new THREE.ShaderMaterial({
-      ...logDepth(earthVertex, earthFragment),
+      ...earthShaders,
+      // Imagery tiles at low zoom levels are coarser polyhedra than this sphere, and the two surfaces cross in rows
+      // of facets that would show as dark arcs. This sphere's depth sits 0.2% further back, so wherever a tile is
+      // drawn the tile wins; nothing else is near enough behind the surface to notice.
+      vertexShader: earthShaders.vertexShader.replace(/\}\s*$/, "  #ifdef USE_LOGARITHMIC_DEPTH_BUFFER\n    vFragDepth *= 1.002;\n  #endif\n}\n"),
       uniforms: {
         uDay: { value: this.blank },
         uNight: { value: this.blank },
@@ -57,17 +63,24 @@ export class Planet {
     this.clouds.scale.setScalar(1.006);
     this.clouds.renderOrder = 1;
 
+    // uIntensity is the Sun's irradiance in the surface shader's units: it draws sunlit ground as albedo × 1.35 × cos,
+    // a radiance of E/π, so E ≈ 1.35π. Sky and ground then keep their real proportions.
     this.atmosphereMaterial = new THREE.ShaderMaterial({
       ...logDepth(atmosphereVertex, atmosphereFragment),
-      uniforms: { uSun: { value: sun }, uOuter: { value: ATMOSPHERE_OUTER } },
+      uniforms: { uSun: { value: sun }, uOuter: { value: ATMOSPHERE_OUTER }, uIntensity: { value: 4.5 } },
+      defines: lite ? { STEPS: 8, LIGHT_STEPS: 3 } : {},
       side: THREE.BackSide,
       transparent: true,
+      // The ground is found in the shader, so the haze also lies over the planet's disc.
+      depthTest: false,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      // In-scattered light comes premultiplied; alpha is what the air hides of the scene behind it.
+      premultipliedAlpha: true,
     });
     this.atmosphere = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), this.atmosphereMaterial);
     this.atmosphere.scale.setScalar(ATMOSPHERE_OUTER);
-    this.atmosphere.renderOrder = 6;
+    // Over the ground, imagery, clouds and wind streaks; under the markers, which stay crisp at any angle.
+    this.atmosphere.renderOrder = 1.8;
   }
 
   setSun(lat: number, lon: number) {

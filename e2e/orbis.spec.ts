@@ -60,6 +60,20 @@ test.describe("live globe", () => {
     await expect(card).toContainText(/Altitude\s*4\d\d km/);
   });
 
+  test("rides along with the ISS and hands the camera back", async ({ page }) => {
+    await page.getByRole("button", { name: "Search" }).click();
+    const box = page.getByRole("dialog").getByPlaceholder("Satellite, flight, ship or place");
+    await box.fill("ISS");
+    await expect(page.getByRole("option").first()).toContainText("ISS (ZARYA)");
+    await box.press("Enter");
+    const card = page.getByRole("complementary", { name: "ISS (ZARYA)" });
+    await card.getByRole("button", { name: "Ride along" }).click();
+    const stop = card.getByRole("button", { name: "Stop riding" });
+    await expect(stop).toHaveAttribute("aria-pressed", "true");
+    await stop.click();
+    await expect(card.getByRole("button", { name: "Ride along" })).toHaveAttribute("aria-pressed", "false");
+  });
+
   test("replays the past and returns to live", async ({ page }) => {
     const timeline = page.getByRole("region", { name: "Timeline, last 24 hours" });
     await timeline.getByRole("button", { name: "600×" }).click();
@@ -79,7 +93,7 @@ test.describe("live globe", () => {
 
 test("sources credit every data provider", async ({ page }) => {
   await page.goto("/en/sources");
-  for (const name of ["CelesTrak", "adsb.lol", "aisstream.io", "Digitraffic", "USGS", "NASA FIRMS", "NASA GIBS", "Natural Earth", "OpenStreetMap", "d3-celestial", "NASA/Goddard SVS"]) {
+  for (const name of ["CelesTrak", "adsb.lol", "aisstream.io", "Digitraffic", "USGS", "NASA FIRMS", "NASA GIBS", "NOAA GFS", "GDACS", "Natural Earth", "OpenStreetMap", "d3-celestial", "NASA/Goddard SVS"]) {
     await expect(page.getByRole("heading", { name: new RegExp(name) })).toBeVisible();
   }
   await expect(page.getByText("ODbL").first()).toBeVisible();
@@ -91,6 +105,30 @@ test("feeds answer with CDN cache headers", async ({ request }) => {
   expect(res.headers()["cache-control"]).toContain("s-maxage");
   const body = await res.json();
   expect(Array.isArray(body.quakes)).toBeTruthy();
+});
+
+test("tropical cyclones come with their tracks and open a card", async ({ page, request, isMobile }) => {
+  const res = await request.get("/api/storms");
+  expect(res.ok()).toBeTruthy();
+  expect(res.headers()["cache-control"]).toContain("s-maxage");
+  const { storms } = (await res.json()) as { storms: { id: number; name: string; track: { t: number }[] }[] };
+  expect(Array.isArray(storms)).toBeTruthy();
+  await page.goto("/en/live?debug=1");
+  await globeReady(page);
+  if (isMobile) await page.getByRole("button", { name: "Show layers" }).click();
+  await expect(page.getByRole("switch", { name: /Cyclones/ })).toHaveAttribute("aria-checked", "true");
+  // Whatever storms are active today (there may be none), each one opens its card.
+  const storm = storms.find((s) => s.track.length > 1);
+  if (!storm) return;
+  if (isMobile) await page.getByRole("button", { name: "Close layers" }).click();
+  await page.waitForFunction(() => (window as unknown as { __orbisStore: { getState(): { feeds: { storms: { status: string } } } } }).__orbisStore.getState().feeds.storms.status === "ready");
+  await page.evaluate((id) => {
+    const store = (window as unknown as { __orbisStore: { getState(): { select(s: object): void } } }).__orbisStore;
+    store.getState().select({ kind: "storm", id });
+  }, storm.id);
+  const card = page.getByRole("complementary", { name: storm.name });
+  await expect(card).toContainText("Strongest wind");
+  await expect(card.getByRole("link", { name: /GDACS report/ })).toBeVisible();
 });
 
 test("case study explains the build in both languages", async ({ page }) => {
@@ -144,6 +182,23 @@ test("rain radar is a layer and the sky panel shows the weather", async ({ page,
   await page.getByRole("button", { name: "Above me" }).click();
   await page.getByRole("button", { name: "Use the view centre" }).click();
   await expect(page.getByRole("region", { name: "The sky above you" })).toContainText(/°C/, { timeout: 30_000 });
+});
+
+test("streams the wind and reads it at a tapped spot", async ({ page, isMobile }) => {
+  await page.goto("/en/live?debug=1");
+  await globeReady(page);
+  if (isMobile) await page.getByRole("button", { name: "Show layers" }).click();
+  const wind = page.getByRole("switch", { name: /Wind/ });
+  await expect(wind).toHaveAttribute("aria-checked", "false");
+  await wind.click();
+  // The GFS cycle the particles follow, e.g. "GFS 18z".
+  await expect(wind).toContainText(/GFS \d\dz/);
+  if (isMobile) await page.getByRole("button", { name: "Close layers" }).click();
+  await page.evaluate(() => {
+    const store = (window as unknown as { __orbisStore: { getState(): { select(s: object): void } } }).__orbisStore;
+    store.getState().select({ kind: "point", lat: 50.45, lon: 30.52 });
+  });
+  await expect(page.getByRole("complementary").filter({ hasText: "Wind" })).toContainText(/\d m\/s|Calm/, { timeout: 30_000 });
 });
 
 test("the guided tour starts, captions its stops and stops on Escape", async ({ page }) => {

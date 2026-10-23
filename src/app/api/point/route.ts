@@ -38,7 +38,9 @@ export interface PointInfo {
   sunset: string | null;
   temperature: number | null;
   weatherCode: number | null;
+  /** 10 m wind, m/s, and the bearing it blows from. */
   wind: number | null;
+  windFrom: number | null;
 }
 
 export async function GET(request: NextRequest) {
@@ -59,7 +61,7 @@ export async function GET(request: NextRequest) {
         .then((r) => r.json() as Promise<{ name?: string; display_name?: string; address?: Record<string, string> }>)
         .catch(() => null),
       fetchUpstream(
-        `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&timezone=auto&forecast_days=1&current=temperature_2m,weather_code,wind_speed_10m&daily=sunrise,sunset`,
+        `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&timezone=auto&forecast_days=1&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&daily=sunrise,sunset`,
         {},
         8000,
       )
@@ -68,7 +70,7 @@ export async function GET(request: NextRequest) {
             r.json() as Promise<{
               timezone?: string;
               utc_offset_seconds?: number;
-              current?: { temperature_2m?: number; weather_code?: number; wind_speed_10m?: number };
+              current?: { temperature_2m?: number; weather_code?: number; wind_speed_10m?: number; wind_direction_10m?: number };
               daily?: { sunrise?: string[]; sunset?: string[] };
             }>,
         )
@@ -95,6 +97,7 @@ export async function GET(request: NextRequest) {
       temperature: weather?.current?.temperature_2m ?? null,
       weatherCode: weather?.current?.weather_code ?? null,
       wind: weather?.current?.wind_speed_10m ?? null,
+      windFrom: weather?.current?.wind_direction_10m ?? null,
     };
     if (!place && !weather && !ground) throw new Error("no source answered");
     return Response.json(info, { headers: cacheHeaders(900) });

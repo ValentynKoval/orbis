@@ -14,6 +14,7 @@ const SWATCH: Record<SearchCandidate["kind"], string> = {
   ship: "bg-aurora",
   quake: "bg-seismic",
   place: "bg-foil",
+  storm: "bg-[#ff5d73]",
 };
 
 /** Command palette: one box that finds satellites, flights, ships and quakes, then flies there. */
@@ -25,6 +26,8 @@ export function Search() {
   const [candidates, setCandidates] = useState<SearchCandidate[]>([]);
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  // The palette may open before the satellite catalogue has loaded; it refreshes when the catalogue arrives.
+  const satellites = useOrbis((s) => s.feeds.satellites.count);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -54,7 +57,7 @@ export function Search() {
     return () => {
       alive = false;
     };
-  }, [open, engine, t]);
+  }, [open, engine, t, satellites]);
 
   const results = useMemo(() => search(query, candidates), [query, candidates]);
 

@@ -54,6 +54,14 @@ interface OrbisState {
   toggleSound(): void;
   /** The guided tour is running. */
   tour: boolean;
+  /** The camera is riding along with the selected object. */
+  following: boolean;
+  /**
+   * The panel in the right dock (on phones, the bottom sheet). Cards for a selection take the same
+   * place, so opening a panel clears the selection and selecting something closes the panel.
+   */
+  panel: "sky" | "analyst" | "layers" | null;
+  openPanel(panel: "sky" | "analyst" | "layers" | null): void;
   /** The browser's IANA time zone ("UTC" until the client has mounted, so server and first render agree). */
   timeZone: string;
   /** Show times in UTC instead of the visitor's zone. */
@@ -72,8 +80,8 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   progress: 0,
   ready: false,
   webglError: false,
-  layers: { satellites: true, planes: true, ships: true, quakes: true, fires: true, aurora: true, rain: true, places: true, clouds: true, lights: true, borders: false, constellations: true },
-  feeds: { satellites: idle, planes: idle, ships: idle, quakes: idle, fires: idle, clouds: idle, aurora: idle, rain: idle },
+  layers: { satellites: true, planes: true, ships: true, quakes: true, fires: true, aurora: true, rain: true, wind: false, storms: true, places: true, clouds: true, lights: true, borders: false, constellations: true },
+  feeds: { satellites: idle, planes: idle, ships: idle, quakes: idle, fires: idle, clouds: idle, aurora: idle, rain: idle, wind: idle, storms: idle },
   selection: null,
   selectionLive: null,
   selectionDetail: null,
@@ -81,7 +89,14 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   time: { live: true, rate: 1 },
   sound: false,
   tour: false,
-  setTour: (tour) => set({ tour }),
+  following: false,
+  setTour: (tour) => set({ tour, ...(tour ? { panel: null } : {}) }),
+  panel: null,
+  openPanel: (panel) => {
+    if (panel && get().selection) get().select(null);
+    if (panel && get().selectedBody) get().selectBody(null);
+    set({ panel });
+  },
   timeZone: "UTC",
   utc: false,
   toggleUtc: () => {
@@ -113,7 +128,7 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
   observer: null,
   setObserver: (observer) => set({ observer }),
   selectBody: (ref) => {
-    set({ selectedBody: ref });
+    set({ selectedBody: ref, ...(ref ? { panel: null } : {}) });
     get().engine?.selectBody(ref);
   },
   focusOn: (ref) => {
@@ -130,7 +145,7 @@ export const useOrbis = create<OrbisState>()((set, get) => ({
     get().engine?.setLayerVisible(key, layers[key]);
   },
   select: (selection) => {
-    set({ selection, selectionLive: null, selectionDetail: null });
+    set({ selection, selectionLive: null, selectionDetail: null, ...(selection ? { panel: null } : {}) });
     get().engine?.select(selection);
   },
   setPlaneFilter: (planeFilter) => {

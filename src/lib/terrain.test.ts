@@ -26,11 +26,11 @@ describe("terrain grids", () => {
     expect(sampleGrid(grid, 0.5, 0)).toBe(0);
   });
 
-  it("maps imagery tiles to the grid two levels up, at most level 13", () => {
+  it("maps imagery tiles to the grid three levels up, at least 8 and at most 12", () => {
     expect(terrainTileFor(7, 1, 1)).toBeNull();
     expect(terrainTileFor(9, 300, 150)).toEqual({ z: 8, x: 150, y: 75 });
-    expect(terrainTileFor(12, 1001, 803)).toEqual({ z: 10, x: 250, y: 200 });
-    expect(terrainTileFor(17, 4004, 3212)).toEqual({ z: 13, x: 250, y: 200 });
+    expect(terrainTileFor(14, 4004, 3212)).toEqual({ z: 11, x: 500, y: 401 });
+    expect(terrainTileFor(18, 64064, 51392)).toEqual({ z: 12, x: 1001, y: 803 });
   });
 
   it("puts a point inside its own tile", () => {

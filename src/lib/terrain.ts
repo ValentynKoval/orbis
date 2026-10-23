@@ -2,14 +2,16 @@
  * Compact terrain: heights in metres on a (TERRAIN_GRID+1)² grid per Web
  * Mercator tile, little-endian Int16, rows south → north. The site serves
  * these from /api/terrain/{z}/{x}/{y}, decoded once from Mapzen Terrarium
- * PNGs and cached on the CDN forever: about 2 KB per tile instead of 120 KB.
+ * PNGs and cached on the CDN forever: about 8 KB per tile instead of 120 KB.
  */
 import { latToMercator, tileBounds } from "./tiles";
 
-export const TERRAIN_GRID = 32;
+export const TERRAIN_GRID = 64;
 export const TERRAIN_MIN_LEVEL = 8;
-/** Deeper imagery samples this level's grid (~150 m spacing at the equator). */
-export const TERRAIN_MAX_LEVEL = 13;
+/** Deeper imagery samples this level's grid (~150 m spacing at the equator, ~100 m at 50°). */
+export const TERRAIN_MAX_LEVEL = 12;
+/** Bumped when the grid format changes, so caches never mix sizes. */
+export const TERRAIN_VERSION = 2;
 
 /** Terrarium encoding: (R × 256 + G + B / 256) − 32768 metres. */
 export function decodeTerrarium(r: number, g: number, b: number): number {
@@ -58,12 +60,13 @@ export function tileUv(z: number, x: number, y: number, lat: number, lon: number
 
 /**
  * The terrain tile whose grid serves imagery tile (z, x, y), or null above the terrain range. One grid
- * serves the 16 imagery tiles two levels down (8 × 8 samples each, plenty for a 13 × 13 mesh), so a
- * screenful of imagery needs a handful of terrain requests.
+ * of 65 × 65 heights serves the 64 imagery tiles three levels down (8 × 8 samples each, close to the
+ * 12 × 12 mesh), so ridges keep their shape in a tilted view and a screenful of imagery still needs
+ * only a handful of terrain requests.
  */
 export function terrainTileFor(z: number, x: number, y: number): { z: number; x: number; y: number } | null {
   if (z < TERRAIN_MIN_LEVEL) return null;
-  const tz = Math.max(TERRAIN_MIN_LEVEL, Math.min(z - 2, TERRAIN_MAX_LEVEL));
+  const tz = Math.max(TERRAIN_MIN_LEVEL, Math.min(z - 3, TERRAIN_MAX_LEVEL));
   const s = 2 ** (z - tz);
   return { z: tz, x: Math.floor(x / s), y: Math.floor(y / s) };
 }

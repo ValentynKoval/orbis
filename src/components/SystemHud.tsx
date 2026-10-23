@@ -10,7 +10,7 @@ import type { SolarWind } from "@/lib/feeds/sun";
 import { useOrbis } from "@/store/orbis";
 import { BODY_COLORS, MAJOR, RADIUS_KM, type BodyRef, type MajorBody } from "@/engine/SolarSystem";
 import { Close, Target } from "./icons";
-import { useClockFormat, useNow } from "./hooks";
+import { useClockFormat, useNow, useReserve } from "./hooks";
 
 const sameRef = (a: BodyRef | null, b: BodyRef | null) =>
   !!a && !!b && a.kind === b.kind && (a.kind === "major" ? a.id === (b as { id: MajorBody }).id : a.index === (b as { index: number }).index);
@@ -36,6 +36,7 @@ function lightTime(au: number, t: ReturnType<typeof useDict>, locale: "uk" | "en
 
 export function SystemHud() {
   const t = useDict();
+  const reserve = useReserve<HTMLElement>("--timeline-h", useOrbis((s) => s.space) === "system");
   const engine = useOrbis((s) => s.engine);
   const selected = useOrbis((s) => s.selectedBody);
   const focus = useOrbis((s) => s.focusBody);
@@ -58,7 +59,7 @@ export function SystemHud() {
   return (
     <>
       {/* Bodies list */}
-      <section aria-label={t.system.title} className="bezel pointer-events-auto absolute top-24 left-4 hidden w-[17rem] md:block">
+      <section aria-label={t.system.title} className="dock-left bezel pointer-events-auto hidden w-[17rem] md:block">
         <div className="bezel-core p-2">
           <p className="px-3 pt-1.5 pb-2 text-xs text-haze">{t.system.title}</p>
           <ul className="flex flex-col">
@@ -92,8 +93,8 @@ export function SystemHud() {
         </div>
       </section>
 
-      {/* Phones: the bodies list is a select. */}
-      <label className="bezel pointer-events-auto absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+4.5rem)] left-4 rounded-full p-1 md:hidden">
+      {/* Phones: the bodies list is a select; a body card takes its place while open. */}
+      <label className={`bezel pointer-events-auto absolute bottom-[var(--dock-bottom)] left-4 rounded-full p-1 md:hidden ${selected ? "hidden" : ""}`}>
         <span className="sr-only">{t.system.title}</span>
         <select
           value={focus.kind === "major" ? focus.id : ""}
@@ -112,8 +113,9 @@ export function SystemHud() {
 
       {/* Time: the heliocentric view may run far from now, in either direction. */}
       <section
+        ref={reserve}
         aria-label={t.system.timeLabel}
-        className="bezel pointer-events-auto absolute inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] md:inset-x-auto md:left-1/2 md:w-[min(38rem,calc(100vw-40rem))] md:min-w-[24rem] md:-translate-x-1/2"
+        className="bezel pointer-events-auto absolute inset-x-4 bottom-[var(--safe-b)] md:inset-x-auto md:left-1/2 md:w-[min(38rem,calc(100vw-2rem))] md:-translate-x-1/2"
       >
         <div className="bezel-core flex flex-wrap items-center gap-2 px-3 py-2">
           <div className="flex items-center rounded-full border border-hairline p-0.5" role="group" aria-label={t.timeline.speed}>
@@ -236,7 +238,7 @@ function BodyCard({ selection }: { selection: BodyRef }) {
   return (
     <aside
       aria-label={name}
-      className="bezel pointer-events-auto absolute right-4 bottom-[calc(max(1rem,env(safe-area-inset-bottom))+4.5rem)] max-h-[calc(100dvh-14rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto animate-[card-in_0.7s_var(--ease-orbit)] md:top-24 md:bottom-auto"
+      className="dock-right bezel pointer-events-auto animate-[card-in_0.7s_var(--ease-orbit)]"
     >
       <div className="bezel-core p-5">
         <div className="flex items-start justify-between gap-3">

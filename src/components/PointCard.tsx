@@ -54,14 +54,23 @@ export function PointCard({ lat, lon }: { lat: number; lon: number }) {
       const kind = weatherKind(info.weatherCode);
       rows.push([t.point.weather, `${formatNumber(info.temperature, locale)} °C${kind !== "unknown" ? `, ${t.sky.weather[kind]}` : ""}`]);
     }
+    if (info.wind !== null) {
+      const speed = formatNumber(info.wind, locale, info.wind < 10 ? 1 : 0);
+      rows.push([
+        t.point.wind,
+        info.wind < 0.5 || info.windFrom === null
+          ? fill(t.point.calm, { speed })
+          : fill(t.point.windFrom, {
+              speed,
+              dir: t.point.compass[Math.round(info.windFrom / 45) % 8],
+            }),
+      ]);
+    }
   }
   rows.push([t.card.position, formatLatLon(lat, lon)]);
 
   return (
-    <aside
-      aria-label={title}
-      className="bezel pointer-events-auto absolute right-4 bottom-[calc(max(1rem,env(safe-area-inset-bottom))+7.25rem)] max-h-[calc(100dvh-16rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto animate-[card-in_0.7s_var(--ease-orbit)] md:top-24 md:bottom-auto"
-    >
+    <aside aria-label={title} className="dock-right bezel pointer-events-auto animate-[card-in_0.7s_var(--ease-orbit)]">
       <div className="bezel-core p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
