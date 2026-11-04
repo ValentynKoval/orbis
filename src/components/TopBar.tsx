@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LOCALE_COOKIE, type Locale } from "@/i18n/config";
-import { useDict, useLocale } from "@/i18n/client";
+import type { Locale } from "@/i18n/config";
+import { useDict, useGlobeHref, useLocale, useSetLocale } from "@/i18n/client";
 import { OrbisMark, Wave } from "./icons";
 import { useOrbis } from "@/store/orbis";
 import { useClockFormat, useNow, useTimeZoneSetup } from "./hooks";
@@ -20,6 +20,8 @@ export function TopBar({ live = false }: { live?: boolean }) {
   const locale = useLocale();
   const pathname = usePathname();
   const other: Locale = locale === "uk" ? "en" : "uk";
+  const setLocale = useSetLocale();
+  const globeHref = useGlobeHref();
   const now = useNow(1000);
   const sound = useOrbis((s) => s.sound);
   const toggleSound = useOrbis((s) => s.toggleSound);
@@ -35,7 +37,7 @@ export function TopBar({ live = false }: { live?: boolean }) {
     <header className={`pointer-events-none fixed inset-x-0 top-0 z-20 flex justify-center px-4 pt-[max(1rem,env(safe-area-inset-top))] ${live ? "lg:justify-start" : ""}`}>
       <nav className="bezel pointer-events-auto flex items-center rounded-full p-1">
         <div className="bezel-core flex items-center gap-1 rounded-full py-1 pr-1 pl-3 sm:gap-2">
-          <Link href={`/${locale}`} aria-label={t.nav.home} className="flex items-center gap-2 rounded-full pr-2">
+          <Link href={globeHref("")} aria-label={t.nav.home} className="flex items-center gap-2 rounded-full pr-2">
             <OrbisMark className="size-6 text-lunar" />
             <span className="font-display text-sm font-medium tracking-tight">Orbis</span>
           </Link>
@@ -76,8 +78,12 @@ export function TopBar({ live = false }: { live?: boolean }) {
           <Link
             href={switchPath(pathname, other)}
             aria-label={t.nav.language}
-            onClick={() => {
-              document.cookie = `${LOCALE_COOKIE}=${other}; path=/; max-age=31536000; samesite=lax`;
+            onClick={(e) => {
+              // The header only lives on the globe pages: switch in place so the camera stays where it is.
+              // A modified click (new tab) still follows the link.
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              setLocale(other);
             }}
             className="rounded-full px-3 py-1.5 text-xs text-haze transition-colors duration-300 ease-[var(--ease-orbit)] hover:text-lunar"
           >
@@ -85,7 +91,7 @@ export function TopBar({ live = false }: { live?: boolean }) {
           </Link>
           {!live && (
             <Link
-              href={`/${locale}/live`}
+              href={globeHref("/live")}
               className="hidden rounded-full bg-foil px-4 py-1.5 text-xs font-medium text-black transition-transform duration-500 ease-[var(--ease-orbit)] active:scale-[0.97] sm:block"
             >
               {t.nav.live}

@@ -31,6 +31,20 @@ test.describe("landing", () => {
     await expect(page).toHaveURL(/\/uk\/live$/);
     await expect(page.getByRole("button", { name: "Спитати Orbis" })).toBeVisible();
   });
+
+  test("after a switch on the landing, the live globe opens on the same Earth", async ({ page }) => {
+    await page.goto("/en");
+    await globeReady(page);
+    await page.getByRole("link", { name: "Мова: українська" }).click();
+    await expect(page).toHaveURL(/\/uk$/);
+    await expect(page).toHaveTitle("Orbis — планета наживо");
+    await page.evaluate(() => Object.assign(window, { __canvasBefore: document.querySelector("canvas") }));
+    await page.getByRole("link", { name: "Відкрити живий глобус" }).first().click();
+    await expect(page).toHaveURL(/\/uk\/live$/);
+    await expect(page.getByRole("button", { name: "Спитати Orbis" })).toBeVisible();
+    await expect(page).toHaveTitle(/^Живий глобус/);
+    expect(await page.evaluate(() => (window as unknown as { __canvasBefore: Element }).__canvasBefore === document.querySelector("canvas"))).toBe(true);
+  });
 });
 
 test.describe("live globe", () => {
@@ -151,6 +165,24 @@ test.describe("beyond the Earth", () => {
     await expect(page.getByRole("complementary", { name: "Saturn" })).toContainText(/From the Sun/);
     await page.getByRole("button", { name: "Back to Earth" }).first().click();
     await expect(page.getByRole("region", { name: "Timeline, last 24 hours" })).toBeVisible({ timeout: 30_000 });
+  });
+
+  test("switching language keeps the solar system view and the same globe", async ({ page, isMobile }) => {
+    test.skip(isMobile, "the bodies list is a desktop panel; phones use the labels");
+    await page.goto("/en/live");
+    await expect(page.locator("canvas")).toHaveCSS("opacity", "1", { timeout: 60_000 });
+    await page.getByRole("button", { name: "Solar system" }).click();
+    await expect(page.getByRole("region", { name: "Solar system", exact: true })).toBeVisible();
+    await page.evaluate(() => Object.assign(window, { __canvasBefore: document.querySelector("canvas") }));
+    await page.getByRole("link", { name: "Мова: українська" }).click();
+    await expect(page).toHaveURL(/\/uk\/live$/);
+    await expect(page.locator("html")).toHaveAttribute("lang", "uk");
+    // Still in the solar system, in Ukrainian, on the same WebGL canvas (the engine was not rebuilt).
+    await expect(page.getByRole("region", { name: "Сонячна система", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __canvasBefore: Element }).__canvasBefore === document.querySelector("canvas"))).toBe(true);
+    await expect(page.locator("canvas")).toHaveCSS("opacity", "1");
+    await page.getByRole("button", { name: "Назад до Землі" }).first().click();
+    await expect(page.getByRole("button", { name: "Сонячна система" })).toBeVisible({ timeout: 30_000 });
   });
 
   test("lists ISS passes for the view centre", async ({ page }) => {

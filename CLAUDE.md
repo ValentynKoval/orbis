@@ -66,6 +66,11 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
 - UI text lives in `src/i18n/en.ts` (source of truth, typed) and `src/i18n/uk.ts` (must match its shape).
   Never hard-code user-facing strings in components. Routes are `/uk/…` and `/en/…`; `src/proxy.ts` picks one
   from the `orbis-locale` cookie or Accept-Language.
+- **The language switch on the globe pages never navigates.** `[locale]` is the root layout segment: going to
+  `/{other}/…` remounts the tree, rebuilds the engine and throws the camera back to Earth (bug fixed 04.11.2026).
+  `LocaleProvider` (`src/i18n/client.tsx`) switches the language in client state and rewrites the address with
+  `history.replaceState`; links between `/{locale}` and `/{locale}/live` use `useGlobeHref()` (the route's language,
+  so the router keeps the globe mounted), links that leave the globe use `useLocale()`.
 - Code, comments, README, commit messages: English. Reports to Valentyn: Russian.
 
 ## Definition of done (every round)

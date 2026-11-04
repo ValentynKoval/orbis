@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { useDict, useLocale } from "@/i18n/client";
+import { useDict, useGlobeHref, useLocale } from "@/i18n/client";
 import { fill } from "@/i18n/config";
 import { sunPosition } from "@/lib/astro";
 import { formatAgo, formatLatLon, formatNumber } from "@/lib/format";
@@ -74,6 +74,7 @@ function shotFor(chapter: Chapter, wide: boolean): Shot {
 export function Landing() {
   const t = useDict();
   const locale = useLocale();
+  const globeHref = useGlobeHref();
   const engine = useOrbis((s) => s.engine);
   const ready = useOrbis((s) => s.ready);
   const webglError = useOrbis((s) => s.webglError);
@@ -190,7 +191,7 @@ export function Landing() {
           </p>
           <div data-fade className="mt-8 flex flex-wrap items-center gap-4">
             <Link
-              href={`/${locale}/live`}
+              href={globeHref("/live")}
               className="group inline-flex items-center gap-3 rounded-full bg-foil py-2 pr-2 pl-6 text-sm font-medium text-black transition-transform duration-500 ease-[var(--ease-orbit)] active:scale-[0.98]"
             >
               {t.hero.cta}
@@ -284,7 +285,7 @@ export function Landing() {
           </h2>
           <p className="mx-auto mt-5 max-w-[30rem] text-haze">{t.chapters.final.body}</p>
           <Link
-            href={`/${locale}/live`}
+            href={globeHref("/live")}
             className="group mt-9 inline-flex items-center gap-3 rounded-full bg-foil py-2 pr-2 pl-6 text-sm font-medium text-black transition-transform duration-500 ease-[var(--ease-orbit)] active:scale-[0.98]"
           >
             {t.hero.cta}
