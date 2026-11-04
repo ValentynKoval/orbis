@@ -9,6 +9,11 @@ export interface Env {
   RELAY_TOKEN: string;
   /** GitHub token allowed to dispatch workflows on this repo (the ships collector). */
   GH_DISPATCH_TOKEN?: string;
+  /**
+   * adsb.lol key (www.adsb.lol/request). Since late October 2026 re-api answers 401 "api key required"
+   * without one; it goes in the `x-api-key` header. Keep the poll at or below twice a minute.
+   */
+  ADSB_API_KEY?: string;
 }
 
 /** One aircraft list every 90 s: fresh enough with client-side extrapolation, gentle on adsb.lol. */
@@ -156,11 +161,16 @@ export class Hub extends DurableObject<Env> {
 
   private async pollAircraft() {
     try {
+      const key = this.env.ADSB_API_KEY?.trim();
       const res = await fetch(ADSB_ALL_URL, {
-        headers: { "User-Agent": "Orbis/1.0 (+https://github.com/ValentynKoval/orbis)", "Accept-Encoding": "gzip" },
+        headers: {
+          "User-Agent": "Orbis/1.0 (+https://github.com/ValentynKoval/orbis)",
+          "Accept-Encoding": "gzip",
+          ...(key ? { "x-api-key": key } : {}),
+        },
         signal: AbortSignal.timeout(40_000),
       });
-      if (!res.ok) throw new Error(`adsb.lol responded ${res.status}`);
+      if (!res.ok) throw new Error(`adsb.lol responded ${res.status}${res.status === 401 && !key ? " (ADSB_API_KEY is not set)" : ""}`);
       const data = (await res.json()) as { now: number; aircraft: AdsbAircraft[] };
       this.planes = buildPlaneSnapshot(data.now, data.aircraft);
       this.planesJson = JSON.stringify(this.planes);

@@ -42,9 +42,14 @@ It is shown in the shared Intromax portfolio on Freelancehunt.
   Put secrets from Git Bash (`printf '%s' … | wrangler secret put`): Windows PowerShell 5.1 pipes add a BOM. Cost: 144 subrequests and
   ~5 runner-hours a day (public repo, free); no extra Durable Object requests.
 - Only requests with `x-orbis-key: RELAY_TOKEN` are served; Vercel holds the token (`RELAY_URL`, `RELAY_TOKEN` env).
-  Secrets on the worker: `RELAY_TOKEN`, `GH_DISPATCH_TOKEN` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
+  Secrets on the worker: `RELAY_TOKEN`, `GH_DISPATCH_TOKEN`, `ADSB_API_KEY` (`wrangler secret put`). Local dev: `relay/.dev.vars` (ignored).
 - OpenSky is not used: it does not answer requests from Cloudflare or Vercel (AWS) networks. Aircraft come from
   adsb.lol (ODbL), which must stay credited on the Sources page.
+- **adsb.lol needs a key** (since late October 2026; seen 04.11.2026): `re-api.adsb.lol/?all` answers 401
+  "api key required" without one, `/health` then shows `planeError`. The free ad-hoc key comes from
+  www.adsb.lol/request (asks what it is for and how ODbL is honoured; the email must be confirmed within 24 h).
+  It is the worker secret `ADSB_API_KEY`, sent as `x-api-key`. Whole-world snapshots: at most twice a minute
+  (we poll every 90 s); repeated 429s can get the key revoked.
 - The `data` branch is refreshed by `.github/workflows/data.yml` every 2 h: CelesTrak element sets and the cloud mask
   (`scripts/cloud-mask.mjs`, 8k GIBS mosaic → 4k/2k masks). Browsers load the mask straight from raw.githubusercontent.
 - History: the hub writes one gzipped frame per kind every 5 min (planes: motion columns only; ships: full snapshot)
